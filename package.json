@@ -1,0 +1,16 @@
+{
+  "name": "spond-local-mcp",
+  "version": "0.1.0",
+  "license": "0BSD",
+  "private": true,
+  "type": "module",
+  "description": "Local, read-only Spond MCP with password sign-in and renewable tokens",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "login": "node src/login.js",
+    "start": "node src/server.js",
+    "test": "node --test"
+  }
+}

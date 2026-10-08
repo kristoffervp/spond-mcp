@@ -1,0 +1,23 @@
+# Explicit public-file allowlist. Sessions, recon dumps, and local notes stay out of Git.
+/*
+!/.gitignore
+!/LICENSE
+!/README.md
+!/README.no.md
+!/package.json
+!/package-lock.json
+!/src/
+/src/*
+!/src/auth.js
+!/src/errors.js
+!/src/login.js
+!/src/mcp-format.js
+!/src/paths.js
+!/src/server.js
+!/src/spond.js
+!/test/
+/test/*
+!/test/auth.test.js
+!/test/mcp-format.test.js
+!/test/server.test.js
+!/test/spond.test.js
