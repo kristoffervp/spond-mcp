@@ -8,6 +8,8 @@ const maxItems = 50;
 const maxComments = 50;
 const maxTextChars = 20_000;
 const maxSpondEvents = 100;
+const maxExcerptChars = 200;
+const chatIdPattern = /^[0-9A-Za-z_-]{1,64}$/;
 const cacheMs = 5 * 60_000;
 const dayMs = 86_400_000;
 const defaultTimeZone = 'Europe/Oslo';
@@ -55,9 +57,20 @@ function addDays(date, days) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * dayMs).toISOString().slice(0, 10);
 }
 
+function chatId(value) {
+  if (typeof value !== 'string' || !chatIdPattern.test(value)) throw new PublicError('Invalid chat_id.');
+  return value;
+}
+
+function limitValue(value) {
+  if (!Number.isInteger(value) || value < 1 || value > maxItems) throw new PublicError(`limit must be an integer from 1 to ${maxItems}.`);
+  return value;
+}
+
 // Spond sends UTC timestamps; agents get local wall-clock time with its offset, e.g. 2026-10-09T19:30+02:00.
+// The chat host may send epoch milliseconds instead of ISO strings.
 function localTime(value, timeZone) {
-  const time = typeof value === 'string' ? Date.parse(value) : NaN;
+  const time = typeof value === 'string' ? Date.parse(value) : typeof value === 'number' ? value : NaN;
   if (!Number.isFinite(time)) return undefined;
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
     timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -103,6 +116,7 @@ export class Spond {
   #refresh;
   #fetcher;
   #cache = new Map();
+  #chat;
 
   constructor({ sessionProvider = currentSession, refresh = refreshSessionNow, fetcher = fetch } = {}) {
     this.#sessionProvider = sessionProvider;
@@ -110,7 +124,7 @@ export class Spond {
     this.#fetcher = fetcher;
   }
 
-  async #request(path, query) {
+  async #request(path, query, { method = 'GET' } = {}) {
     let session = await this.#sessionProvider();
     const url = new URL(`${apiBase}${path}`);
     if (url.origin !== apiOrigin || !url.pathname.startsWith('/core/v1/')) throw new PublicError('Invalid Spond address.');
@@ -118,7 +132,9 @@ export class Spond {
     const send = async () => {
       try {
         return await this.#fetcher(url, {
-          headers: { Authorization: `Bearer ${session.accessToken}`, Accept: 'application/json' },
+          method, headers: { Authorization: `Bearer ${session.accessToken}`, Accept: 'application/json',
+            ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
+          ...(method === 'POST' ? { body: '{}' } : {}),
           redirect: 'manual', signal: AbortSignal.timeout(30_000),
         });
       } catch { throw new PublicError('Could not reach Spond. Check the network and retry.'); }
@@ -128,6 +144,48 @@ export class Spond {
       session = await this.#refresh(session);
       response = await send();
     }
+    return this.#checked(response);
+  }
+
+  // Chat lives on a separate host. POST /chat gives its address and a chat token, kept in memory only.
+  #chatSession(renew = false) {
+    if (!this.#chat || renew) {
+      const pending = (async () => {
+        const data = await this.#request('/chat', undefined, { method: 'POST' });
+        let base;
+        try { base = new URL(data?.url); } catch { throw new PublicError('Spond sent an unexpected chat response.'); }
+        if (typeof data?.auth !== 'string' || !data.auth) throw new PublicError('Spond sent an unexpected chat response.');
+        if (base.protocol !== 'https:' || !(base.hostname === 'spond.com' || base.hostname.endsWith('.spond.com'))) {
+          throw new PublicError(`Spond chat is on an unexpected host (${base.hostname}).`);
+        }
+        return { url: base.href.replace(/\/+$/, ''), origin: base.origin, auth: data.auth };
+      })();
+      this.#chat = pending;
+      pending.catch(() => { if (this.#chat === pending) this.#chat = undefined; });
+    }
+    return this.#chat;
+  }
+
+  async #chatRequest(path, query) {
+    for (let attempt = 0; ; attempt += 1) {
+      const chat = await this.#chatSession(attempt > 0);
+      const url = new URL(`${chat.url}${path}`);
+      if (url.origin !== chat.origin) throw new PublicError('Invalid Spond chat address.');
+      for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, value);
+      let response;
+      try {
+        response = await this.#fetcher(url, {
+          method: 'GET', headers: { Auth: chat.auth, Accept: 'application/json' },
+          redirect: 'manual', signal: AbortSignal.timeout(30_000),
+        });
+      } catch { throw new PublicError('Could not reach Spond chat. Check the network and retry.'); }
+      // The chat token can expire before the sign-in does: get a new one once.
+      if ((response.status === 401 || response.status === 403) && attempt === 0) continue;
+      return this.#checked(response);
+    }
+  }
+
+  async #checked(response) {
     if (response.status === 401) throw new PublicError('The Spond sign-in has expired. Run npm run login again.');
     if (response.status === 404) throw new PublicError('Not found in Spond.');
     if (response.status === 429) throw new PublicError('Spond is limiting requests. Wait a few minutes before retrying.');
@@ -154,6 +212,8 @@ export class Spond {
     const people = new Map([[profile.id, fullName(profile)]]);
     const groupNames = new Map();
     const family = new Map();
+    // The user and the other guardians of the user's children, so chat messages from the family can be marked.
+    const familyProfiles = new Set([profile.id]);
     for (const group of groups) {
       if (typeof group?.id !== 'string') continue;
       groupNames.set(group.id, str(group.name));
@@ -171,10 +231,14 @@ export class Spond {
       for (const member of list(group.behalfOfMemberships)) {
         if (typeof member?.id === 'string') {
           family.set(member.id, { name: fullName(member), relation: 'child', groupId: group.id, subGroupIds: list(member.subGroups) });
+          const listed = list(group.members).find((entry) => entry?.id === member.id);
+          for (const guardian of [...list(member.guardians), ...list(listed?.guardians)]) {
+            if (typeof guardian?.profile?.id === 'string') familyProfiles.add(guardian.profile.id);
+          }
         }
       }
     }
-    return { groups, people, groupNames, family, timeZone: validTimeZone(profile.timezone) };
+    return { groups, people, groupNames, family, familyProfiles, timeZone: validTimeZone(profile.timezone) };
   }
 
   #event(event, context, { full = false } = {}) {
@@ -307,5 +371,76 @@ export class Spond {
       return result;
     });
     return { timeZone, items, total: items.length };
+  }
+
+  #message(message, context, { excerpt = false } = {}) {
+    const { people, familyProfiles, timeZone } = context;
+    const result = {};
+    if (Number.isInteger(message?.msgNum)) result.num = message.msgNum;
+    result.author = people.get(message?.user) || 'Unknown';
+    if (familyProfiles.has(message?.user)) result.fromFamily = true;
+    const time = localTime(message?.timestamp, timeZone);
+    if (time) result.time = time;
+    const type = str(message?.type, 40)?.toLowerCase();
+    if (type && type !== 'text') result.type = type;
+    if (type === 'deleted') return result;
+    if (excerpt) {
+      const text = str(message?.text, maxExcerptChars + 1);
+      if (text) result.text = text.length > maxExcerptChars ? `${text.slice(0, maxExcerptChars)}…` : text;
+    } else {
+      longText(result, 'text', message?.text);
+    }
+    if (message?.image) result.hasImage = true;
+    if (message?.file) result.hasFile = true;
+    if (typeof message?.spond?.id === 'string') result.event = { id: message.spond.id, title: str(message.spond.heading) };
+    if (typeof message?.post?.id === 'string') result.post = { id: message.post.id, title: str(message.post.title) };
+    return result;
+  }
+
+  async listChats({ limit = 20 } = {}) {
+    limitValue(limit);
+    const context = await this.#context();
+    const { groupNames, timeZone } = context;
+    // Chats the user takes part in themselves, and chats they follow as a guardian (often the parents' group chats).
+    const [own, guardian] = await Promise.all([
+      this.#chatRequest('/chats', { max: String(limit) }),
+      this.#chatRequest('/chats', { max: String(limit), guardianChats: 'true' }),
+    ]);
+    if (!Array.isArray(own) || !Array.isArray(guardian)) throw new PublicError('Spond sent an unexpected response.');
+    const chats = new Map();
+    for (const [chat, asGuardian] of [...own.map((c) => [c, false]), ...guardian.map((c) => [c, true])]) {
+      if (typeof chat?.id !== 'string' || !chatIdPattern.test(chat.id) || chats.has(chat.id)) continue;
+      const result = { id: chat.id, type: str(chat.type, 40)?.toLowerCase() };
+      const group = groupNames.get(chat.groupId);
+      const name = str(chat.name) || group;
+      if (name) result.name = name;
+      if (group) result.group = group;
+      if (asGuardian) result.asGuardian = true;
+      const newest = localTime(chat.newestTimestamp, timeZone);
+      if (newest) result.newest = newest;
+      if (Number.isInteger(chat.message?.msgNum)) result.newestNum = chat.message.msgNum;
+      if (chat.unread === true) result.unread = true;
+      result.participantCount = list(chat.participants).length;
+      if (chat.message) result.lastMessage = this.#message(chat.message, context, { excerpt: true });
+      chats.set(chat.id, result);
+    }
+    const items = [...chats.values()].sort((a, b) => (Date.parse(b.newest) || 0) - (Date.parse(a.newest) || 0));
+    return { timeZone, items: items.slice(0, limit), total: items.length, truncated: items.length > limit };
+  }
+
+  async getChat({ chat_id, limit = 20, max_num } = {}) {
+    const id = chatId(chat_id);
+    limitValue(limit);
+    if (max_num !== undefined && (!Number.isInteger(max_num) || max_num < 1)) throw new PublicError('max_num must be a positive integer.');
+    const context = await this.#context();
+    const query = { count: String(limit), ...(max_num ? { maxNum: String(max_num) } : {}) };
+    const data = await this.#chatRequest(`/chats/${id}/messages`, query);
+    if (!Array.isArray(data)) throw new PublicError('Spond sent an unexpected response.');
+    const messages = data.filter((message) => message && typeof message === 'object').slice(0, limit)
+      .map((message) => this.#message(message, context))
+      .sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
+    const result = { timeZone: context.timeZone, chatId: id, messages };
+    if (messages.length > 0 && messages[0].num > 1 && data.length >= limit) result.olderBefore = messages[0].num;
+    return result;
   }
 }

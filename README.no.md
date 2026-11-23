@@ -45,20 +45,33 @@ claude mcp add spond -- "$(command -v node)" "$PWD/src/server.js"
 | `list_events` | List arrangementer i en periode med tidspunkt, oppmøte, sted og familiens svar |
 | `get_event` | Les ett arrangement med beskrivelse, arrangører og kommentarer |
 | `list_posts` | Vis nye innlegg på gruppeveggen med kommentarer |
+| `list_chats` | Vis nye chatter, også gruppechatter du følger som foresatt |
+| `get_chat` | Les de nyeste meldingene i én chat |
 
 `list_events` viser som standard i dag og de neste 14 dagene. `from_date` og `to_date` bruker `YYYY-MM-DD`, med maksimalt 366 dager per kall. Oppgi en `group_id` fra `list_groups` for å se én gruppe, eller `only_unanswered: true` for å se bare arrangementer et familiemedlem ikke har svart på. Hvert arrangement viser svaret til hvert familiemedlem (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed` eller `unknown`) og antall svar fra alle inviterte.
 
 Tidspunkter er lokale, med tidssonen fra Spond-profilen din, for eksempel `2026-10-10T12:15+02:00`. Lister viser maks 50 elementer, og `list_events` merker avkorting. `list_posts` tar en `limit` fra 1 til 50 (standard 20). Lange tekster kan forkortes og merkes. Profil og grupper mellomlagres i fem minutter, så endringer i grupper kan ta så lang tid før de vises.
 
+`list_chats` viser typen til hver chat (`group`, `dm` og andre), gruppa, tidspunkt og nummer (`newestNum`) for den nyeste meldingen, og et utdrag av den. `asGuardian` merker chatter du følger på vegne av et barn, og det er der foreldrenes gruppechatter vanligvis ligger. `get_chat` gir inntil `limit` meldinger (1 til 50, standard 20), eldste først. Finnes det eldre meldinger, gir `olderBefore` et nummer du kan sende som `max_num` for å lese lenger bakover. `fromFamily` merker meldinger fra deg eller en annen foresatt til barna dine. Slettede meldinger har ingen tekst.
+
 ## Personvern og sikkerhet
 
-Serveren kjører lokalt via stdio og åpner ingen lyttende nettverksport. En tilkoblet KI-klient kan hente Spond-informasjonen du ber om. Innhold brukt med en skybasert KI-tjeneste kan bli sendt dit. Behandle beskrivelser, innlegg og kommentarer som ikke-betrodd innhold, se gjennom verktøykall og bruk en klient du stoler på.
+Serveren kjører lokalt via stdio og åpner ingen lyttende nettverksport. En tilkoblet KI-klient kan hente Spond-informasjonen du ber om. Innhold brukt med en skybasert KI-tjeneste kan bli sendt dit. Behandle beskrivelser, innlegg, kommentarer og chatmeldinger som ikke-betrodd innhold, se gjennom verktøykall og bruk en klient du stoler på.
 
-Sponds gruppedata inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, som arrangør, kontaktperson eller forfatter. Den returnerer aldri telefonnumre, e-postadresser, fødselsdatoer, medlemslister eller bildelenker. Svar vises per person bare for din egen familie; for alle andre vises antall.
+Sponds gruppedata inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, som arrangør, kontaktperson eller forfatter. Chatter viser antall deltakere, ikke hvem de er. Den returnerer aldri telefonnumre, e-postadresser, fødselsdatoer, medlemslister eller bildelenker. Svar vises per person bare for din egen familie; for alle andre vises antall.
 
 Spond begrenser antall forespørsler og har blokkert IP-adresser som logger inn for ofte. Serveren bruker passordet ditt bare under `npm run login`, fornyer med fornyelsestokenet og mellomlagrer profil og grupper.
 
 Tokenene i `.data/` gir tilgang til Spond-kontoen din og må holdes private. Slett `.data/session.json` for å fjerne den lokale innloggingen. Tillatelseslisten i `.gitignore` holder lokale data og maskinspesifikke filer unna en bred `git add .`.
+
+## Endringslogg
+
+### 0.2.0
+- Nye verktøy `list_chats` og `get_chat` leser chatter i Spond, også gruppechatter du følger som foresatt. Meldinger fra deg og de andre foresatte til barna dine merkes `fromFamily`.
+- Chat-tokenet holdes bare i minnet og byttes én gang hvis det går ut. Chat-forespørsler går bare til en `spond.com`-vert over HTTPS.
+
+### 0.1.0
+- Første versjon: `list_family`, `list_groups`, `list_events`, `get_event` og `list_posts`.
 
 ## Lisens
 
