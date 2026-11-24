@@ -31,7 +31,7 @@ test('MCP server negotiates a protocol version and lists tools', async () => {
     assert.equal(replies[0].result.serverInfo.name, 'spond-local-mcp');
     assert.equal(replies[1].result.protocolVersion, '2025-11-25');
     assert.deepEqual(replies[2].result.tools.map((tool) => tool.name),
-      ['list_family', 'list_groups', 'list_events', 'get_event', 'list_posts']);
+      ['list_family', 'list_groups', 'list_events', 'get_event', 'list_posts', 'list_chats', 'get_chat']);
     assert.ok(replies[2].result.tools.every((tool) => tool.annotations.readOnlyHint && !tool.run &&
       tool.inputSchema.additionalProperties === false));
   } finally { child.kill(); }

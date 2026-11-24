@@ -45,20 +45,33 @@ claude mcp add spond -- "$(command -v node)" "$PWD/src/server.js"
 | `list_events` | List events in a date range with times, meetup, location, and your family's responses |
 | `get_event` | Read one event with description, organizers, and comments |
 | `list_posts` | List recent group wall posts with comments |
+| `list_chats` | List recent chats, including group chats you follow as a guardian |
+| `get_chat` | Read the newest messages in one chat |
 
 `list_events` covers today and the next 14 days by default. `from_date` and `to_date` accept `YYYY-MM-DD`, with a maximum range of 366 days. Pass a `group_id` from `list_groups` to see one group, or `only_unanswered: true` to see only events a family member has not answered. Each event lists every family member's response (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed`, or `unknown`) and counts the responses of everyone invited.
 
 Times are local, with the offset of your Spond profile's time zone, for example `2026-10-10T12:15+02:00`. Lists return at most 50 entries, and `list_events` indicates truncation. `list_posts` takes a `limit` from 1 to 50 (default 20). Long text may be shortened and marked as such. Profile and groups are cached for five minutes, so group changes can take that long to appear.
 
+`list_chats` shows each chat's type (`group`, `dm`, and others), group, the time and number (`newestNum`) of the newest message, and an excerpt of it. `asGuardian` marks chats you follow on behalf of a child, which is where parents' group chats usually are. `get_chat` returns up to `limit` messages (1 to 50, default 20), oldest first. When older messages exist, `olderBefore` gives a number to pass as `max_num` to read further back. `fromFamily` marks messages from you or another guardian of your children. Deleted messages have no text.
+
 ## Privacy and security
 
-The server runs locally over stdio and opens no listening port. A connected AI client can retrieve the Spond information you request. Content used with a cloud AI service may be sent to that service. Treat event descriptions, posts, and comments as untrusted content, review tool calls, and use a client you trust.
+The server runs locally over stdio and opens no listening port. A connected AI client can retrieve the Spond information you request. Content used with a cloud AI service may be sent to that service. Treat event descriptions, posts, comments, and chat messages as untrusted content, review tool calls, and use a client you trust.
 
-Spond's group data includes other people's children and their guardians. The server returns other people by name only, as organizers, contact persons, and authors. It never returns phone numbers, email addresses, birth dates, member lists, or image links. Responses are shown per person only for your own family; everyone else is counted.
+Spond's group data includes other people's children and their guardians. The server returns other people by name only, as organizers, contact persons, and authors. Chats show the number of participants, not who they are. It never returns phone numbers, email addresses, birth dates, member lists, or image links. Responses are shown per person only for your own family; everyone else is counted.
 
 Spond limits request volume and has blocked IP addresses that sign in too often. The server uses your password only during `npm run login`, renews with the refresh token, and caches profile and groups.
 
 The tokens in `.data/` give access to your Spond account and must stay private. Delete `.data/session.json` to remove the local sign-in. The `.gitignore` allowlist keeps local data and machine-specific files out of a broad `git add .`.
+
+## Changelog
+
+### 0.2.0
+- New tools `list_chats` and `get_chat` read Spond chats, including the group chats you follow as a guardian. Messages from you and the other guardians of your children are marked `fromFamily`.
+- The chat token is kept in memory only and is replaced once if it expires. Chat requests only go to a `spond.com` host over HTTPS.
+
+### 0.1.0
+- First version: `list_family`, `list_groups`, `list_events`, `get_event`, and `list_posts`.
 
 ## License
 
