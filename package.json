@@ -4,7 +4,7 @@
   "license": "0BSD",
   "private": true,
   "type": "module",
-  "description": "Local, read-only Spond MCP with password sign-in and renewable tokens",
+  "description": "Unofficial local, read-only MCP server for Spond",
   "engines": {
     "node": ">=20"
   },

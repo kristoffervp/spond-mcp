@@ -1,9 +1,15 @@
 # Explicit public-file allowlist. Sessions, recon dumps, and local notes stay out of Git.
 /*
 !/.gitignore
+!/.github/
+/.github/*
+!/.github/workflows/
 !/LICENSE
 !/README.md
 !/README.no.md
+!/CHANGELOG.md
+!/CHANGELOG.no.md
+!/SECURITY.md
 !/package.json
 !/package-lock.json
 !/src/
