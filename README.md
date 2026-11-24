@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.jpg" alt="Spond MCP: a phone with a calendar connects to a team event and a group chat" width="100%"></p>
+
 <h1 align="center">Spond MCP</h1>
 
 <p align="center">

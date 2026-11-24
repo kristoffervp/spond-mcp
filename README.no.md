@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/banner.jpg" alt="Spond MCP: en telefon med kalender kobles til en lagaktivitet og en gruppechat" width="100%"></p>
+
 <h1 align="center">Spond MCP</h1>
 
 <p align="center">
