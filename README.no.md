@@ -1,82 +1,117 @@
-# Spond MCP
+<p align="center"><img src="assets/banner.jpg" alt="Spond MCP: en telefon med kalender kobles til en lagaktivitet og en gruppechat" width="100%"></p>
 
-Norsk · [English](README.md)
+<h1 align="center">Spond MCP</h1>
 
-Les Spond med en lokal MCP-server som kun henter informasjon. Den kan vise deg og barna du svarer for, liste grupper, liste arrangementer med familiens svar, lese et arrangement med kommentarer og vise innlegg på gruppeveggen. Den kan ikke svare på invitasjoner, sende meldinger eller endre data i Spond.
+<p align="center">
+  <a href="https://github.com/kristoffervp/spond-mcp/actions/workflows/test.yml"><img src="https://github.com/kristoffervp/spond-mcp/actions/workflows/test.yml/badge.svg" alt="Test"></a>
+  <a href="https://github.com/kristoffervp/spond-mcp/releases"><img src="https://img.shields.io/github/v/release/kristoffervp/spond-mcp" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-0BSD-blue" alt="Lisens: 0BSD"></a>
+</p>
 
-**Kun testet på macOS.** Andre plattformer er ikke testet. Prosjektet bruker udokumenterte Spond-endepunkter som kan endres; Spond byttet innloggingsendepunkt uten varsel i mai 2026. Prosjektet er ikke tilknyttet eller godkjent av Spond.
+<p align="center">Norsk · <a href="README.md">English</a></p>
 
-## Installer
+En lokal MCP-server med bare lesetilgang, som lar en KI-klient lese arrangementene, innleggene på gruppeveggen og chattene dine i Spond. Den kan ikke svare på invitasjoner, sende meldinger eller endre noe i Spond.
 
-Installer Node.js 20 eller nyere. Det trengs ingen nettleser eller andre avhengigheter. Last ned eller klon prosjektet, åpne mappen i Terminal og kjør:
+**Uoffisiell.** Ikke laget av eller knyttet til Spond AS. Den bruker udokumenterte endepunkter som kan endres uten varsel.
+
+## Kom i gang
+
+Du trenger Node.js 20 eller nyere.
 
 ```sh
-npm ci
+git clone https://github.com/kristoffervp/spond-mcp.git
+cd spond-mcp
+npm install
 npm run login
 ```
 
-Skriv inn e-postadressen og passordet du bruker i Spond. Passordet vises ikke mens du skriver og lagres aldri; bare Sponds tilgangs- og fornyelsestoken lagres i den private `.data/`-mappen. Tilgangstokenet varer et døgn og fornyes automatisk. Fornyelsestokenet varer 90 dager og starter på nytt ved hver fornyelse, så du må bare logge inn igjen hvis serveren ikke brukes på 90 dager eller Spond avslutter økten. Kontoer med totrinnsbekreftelse støttes ikke ennå. Kjør `npm test` for å kontrollere prosjektet uten kontoen din.
+`npm run login` spør etter e-postadressen eller telefonnummeret og passordet du bruker i Spond, og `npm test` sjekker serveren uten å bruke kontoen din. Legg så til serveren i KI-klienten som en lokal (stdio) server. For Claude Desktop, i `claude_desktop_config.json`:
 
-## Koble til en lokal MCP-klient
-
-Legg til en **MCP-server via stdio** i klienten:
-
-| Felt | Verdi |
-| --- | --- |
-| Kommando | Fullstendig sti til Node.js; finn den med `command -v node` |
-| Argumenter | Ett argument: fullstendig sti til prosjektets `src/server.js` |
-| Arbeidsmappe | Fullstendig sti til prosjektmappen |
-| Miljøvariabler | Ingen påkrevd |
-
-Lagre og start klienten på nytt, og kontroller at `spond-local-mcp` er tilkoblet. I Claude Code kan du i stedet kjøre dette fra prosjektmappen:
-
-```sh
-claude mcp add spond -- "$(command -v node)" "$PWD/src/server.js"
+```json
+{
+  "mcpServers": {
+    "spond": {
+      "command": "node",
+      "args": ["/full/sti/til/spond-mcp/src/server.js"]
+    }
+  }
+}
 ```
-
-`npm start` starter serveren direkte. En chat i nettleseren kan ikke starte en lokal stdio-prosess alene; følg klientens tilkoblingsveiledning.
 
 ## Verktøy
 
-| Verktøy | Bruk |
+| Verktøy | Hva det gjør |
 | --- | --- |
-| `list_family` | Vis deg og barna du svarer for, med gruppene deres |
-| `list_groups` | Vis grupper med undergrupper, aktivitet og kontaktperson; ingen medlemslister |
-| `list_events` | List arrangementer i en periode med tidspunkt, oppmøte, sted og familiens svar |
-| `get_event` | Les ett arrangement med beskrivelse, arrangører og kommentarer |
-| `list_posts` | Vis nye innlegg på gruppeveggen med kommentarer |
-| `list_chats` | Vis nye chatter, også gruppechatter du følger som foresatt |
-| `get_chat` | Les de nyeste meldingene i én chat |
+| `list_family` | Deg og barna du svarer for, med gruppene og undergruppene deres |
+| `list_groups` | Grupper med undergrupper, aktivitet, klubb, kontaktperson, antall medlemmer og hvilke familiemedlemmer som er med. Ingen medlemslister |
+| `list_events` | Arrangementer med tidspunkt, oppmøte, sted og familiens svar. `from_date` og `to_date` (`YYYY-MM-DD`) er som standard i dag og de neste 14 dagene, høyst 366 dager. Filtre: `group_id`, `only_unanswered` |
+| `get_event` | Ett arrangement med beskrivelse, arrangører, kommentarer og familiens svar |
+| `list_posts` | Nye innlegg på gruppeveggen med kommentarer, inntil `limit` (1 til 50, standard 20). Filter: `group_id`. `include_images` gir også bildelenker |
+| `list_chats` | Nye chatter, også gruppechatter du følger som foresatt, med tidspunkt, nummer (`newestNum`) og et utdrag av den nyeste meldingen. Inntil `limit` (1 til 50, standard 20) |
+| `get_chat` | De nyeste meldingene i én chat, eldste først, inntil `limit` (1 til 50, standard 20). `max_num` leser lenger bakover. `include_images` gir også bildelenker |
 
-`list_events` viser som standard i dag og de neste 14 dagene. `from_date` og `to_date` bruker `YYYY-MM-DD`, med maksimalt 366 dager per kall. Oppgi en `group_id` fra `list_groups` for å se én gruppe, eller `only_unanswered: true` for å se bare arrangementer et familiemedlem ikke har svart på. Hvert arrangement viser svaret til hvert familiemedlem (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed` eller `unknown`) og antall svar fra alle inviterte.
+Hvert arrangement viser svaret til hvert familiemedlem (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed` eller `unknown`) og antall svar fra alle inviterte. Tidspunkter er lokale, med UTC-forskyvningen for tidssonen i Spond-profilen din, for eksempel `2026-10-10T12:15+02:00`. Lister gir høyst 50 elementer, og lange tekster forkortes og merkes. Svarene kommer som `structuredContent` og som JSON-tekst, begge merket som ikke-betrodd innhold fra Spond.
 
-Tidspunkter er lokale, med tidssonen fra Spond-profilen din, for eksempel `2026-10-10T12:15+02:00`. Lister viser maks 50 elementer, og `list_events` merker avkorting. `list_posts` tar en `limit` fra 1 til 50 (standard 20). Lange tekster kan forkortes og merkes. Profil og grupper mellomlagres i fem minutter, så endringer i grupper kan ta så lang tid før de vises.
+`asGuardian` merker chatter du følger på vegne av et barn, og det er der foreldrenes gruppechatter vanligvis ligger. Når en chat har eldre meldinger, gir `get_chat` `olderBefore`, et nummer du kan sende som `max_num`. `fromFamily` merker meldinger fra deg eller en annen foresatt til barna dine. Slettede meldinger har ingen tekst.
 
-`list_chats` viser typen til hver chat (`group`, `dm` og andre), gruppa, tidspunkt og nummer (`newestNum`) for den nyeste meldingen, og et utdrag av den. `asGuardian` merker chatter du følger på vegne av et barn, og det er der foreldrenes gruppechatter vanligvis ligger. `get_chat` gir inntil `limit` meldinger (1 til 50, standard 20), eldste først. Finnes det eldre meldinger, gir `olderBefore` et nummer du kan sende som `max_num` for å lese lenger bakover. `fromFamily` merker meldinger fra deg eller en annen foresatt til barna dine. Slettede meldinger har ingen tekst.
+## Slik virker det
 
-## Personvern og sikkerhet
+Serveren kjører på datamaskinen din og snakker med KI-klienten over stdio. Den bruker innloggingen fra `npm run login`, som er lagret i `.data/`.
 
-Serveren kjører lokalt via stdio og åpner ingen lyttende nettverksport. En tilkoblet KI-klient kan hente Spond-informasjonen du ber om. Innhold brukt med en skybasert KI-tjeneste kan bli sendt dit. Behandle beskrivelser, innlegg, kommentarer og chatmeldinger som ikke-betrodd innhold, se gjennom verktøykall og bruk en klient du stoler på.
+```mermaid
+flowchart LR
+  client["KI-klient<br/>Claude Desktop, ChatGPT …"]
+  subgraph computer["Din datamaskin"]
+    server["MCP-server<br/>src/server.js, mcp-format.js"]
+    spond["Spond-klient<br/>spond.js"]
+    auth["Innlogging og fornying<br/>auth.js"]
+    login["npm run login<br/>login.js"]
+    data[(".data/<br/>session.json<br/>(innloggingstokenene)")]
+  end
+  api["Spond-API<br/>api.spond.com"]
+  chat["Spond-chat<br/>egen vert på spond.com"]
+  client <-->|"MCP over stdio"| server
+  server --> spond
+  spond -->|"ber om et gyldig token"| auth
+  spond <-->|"HTTPS med tilgangstokenet"| api
+  spond <-->|"HTTPS med et chat-token,<br/>holdt i minnet"| chat
+  login -->|"e-post eller telefon<br/>og passord"| auth
+  auth <-->|"logg inn og forny"| api
+  auth -.->|"lagrer og leser tokenene"| data
+```
 
-Sponds gruppedata inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, som arrangør, kontaktperson eller forfatter. Chatter viser antall deltakere, ikke hvem de er. Den returnerer aldri telefonnumre, e-postadresser, fødselsdatoer eller medlemslister. Bildelenker kommer bare når du ber om dem med `include_images: true` på `list_posts` eller `get_chat`, fordi alle som har lenken, kan åpne bildet uten å logge inn. Svar vises per person bare for din egen familie; for alle andre vises antall.
+## Innstillinger
 
-Spond begrenser antall forespørsler og har blokkert IP-adresser som logger inn for ofte. Serveren bruker passordet ditt bare under `npm run login`, fornyer med fornyelsestokenet og mellomlagrer profil og grupper.
+Settes i klientoppsettet (og i Terminal for `npm run login`):
 
-Tokenene i `.data/` gir tilgang til Spond-kontoen din og må holdes private. Slett `.data/session.json` for å fjerne den lokale innloggingen. Tillatelseslisten i `.gitignore` holder lokale data og maskinspesifikke filer unna en bred `git add .`.
+| Variabel | Standard | Brukes til |
+| --- | --- | --- |
+| `SPOND_DATA_DIR` | `.data` i denne mappen | Hvor innloggingen lagres |
+
+## Feilsøking
+
+- **«No Spond sign-in found» eller «The Spond sign-in has expired».** Kjør `npm run login` på nytt. Fornyelsestokenet varer i 90 dager og starter på nytt ved hver fornying, så dette skjer etter 90 dager uten bruk eller når Spond avslutter økten.
+- **«This Spond account requires two-factor verification».** Kontoer med totrinnsbekreftelse støttes ikke ennå.
+- **«Spond is limiting requests».** Vent noen minutter. Spond har blokkert IP-adresser som logger inn for ofte, så ikke kjør `npm run login` gang på gang.
+- **Innloggingen slutter å virke etter at `.data/` er kopiert til en annen datamaskin.** Hver fornying bytter ut fornyelsestokenet, så to kopier kan ikke begge forbli innlogget. Kjør `npm run login` på hver datamaskin.
+- **«The Spond response is too large».** Snevre inn forespørselen med `group_id`, en kortere periode eller en lavere `limit`.
+- **Klienten får ikke startet serveren.** Bruk hele stien til både `node` (fra `command -v node`) og `src/server.js`.
+- **Endringer i grupper vises ikke.** Profil og grupper mellomlagres i fem minutter.
+
+## Sikkerhet og personvern
+
+- Serveren kjører på din datamaskin og åpner ingen nettverksport. En KI-klient du kobler til, kan likevel lese arrangementene, innleggene og chattene dine i Spond, og en KI-tjeneste i skyen får det klienten leser. Vurder selv hva du vil dele.
+- Tekst fra Spond sendes videre som informasjon, ikke instruksjoner. Det kan ikke stoppe alle forsøk på å styre KI-en. Bruk klienter du stoler på, og se over verktøykallene.
+- Gruppedataene i Spond inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, og gir aldri telefonnumre, e-postadresser, fødselsdatoer eller medlemslister. Svar vises per person bare for din egen familie. Chatter viser antall deltakere, ikke hvem de er.
+- Bildelenker kommer bare med `include_images: true`, fordi alle som har lenken, kan åpne bildet uten å logge inn.
+- Passordet vises ikke mens du skriver, og lagres aldri. `.data/session.json` inneholder tokener som gir tilgang til Spond-kontoen din. Del den aldri, og slett den for å fjerne innloggingen.
+- Forespørsler går bare til `api.spond.com` og til en chat-vert på `spond.com` over HTTPS, og omdirigeringer følges ikke. Feilmeldinger klienten får, inneholder aldri tokener eller personopplysninger.
+- Se [SECURITY.md](SECURITY.md) for å melde fra om sikkerhetshull.
 
 ## Endringslogg
 
-### 0.3.0
-- `list_posts` og `get_chat` tar `include_images: true` for også å gi bildelenker (bare `https://spond.com`-adresser). Uten den er alt som før.
-- `hasImage` settes nå på chatmeldinger med bilder. Spond sender dem som `images`, ikke `image`.
-
-### 0.2.0
-- Nye verktøy `list_chats` og `get_chat` leser chatter i Spond, også gruppechatter du følger som foresatt. Meldinger fra deg og de andre foresatte til barna dine merkes `fromFamily`.
-- Chat-tokenet holdes bare i minnet og byttes én gang hvis det går ut. Chat-forespørsler går bare til en `spond.com`-vert over HTTPS.
-
-### 0.1.0
-- Første versjon: `list_family`, `list_groups`, `list_events`, `get_event` og `list_posts`.
+Se [CHANGELOG.no.md](CHANGELOG.no.md) og [Releases](https://github.com/kristoffervp/spond-mcp/releases).
 
 ## Lisens
 
-Kode og dokumentasjon har [0BSD-lisens](LICENSE). Den gjelder ikke Spond-tjenesten eller informasjonen som hentes fra den.
+[0BSD](LICENSE): bruk, endre og del fritt, også kommersielt, uten krav om kreditering. Lisensen gjelder ikke Spond-tjenesten eller innholdet der.

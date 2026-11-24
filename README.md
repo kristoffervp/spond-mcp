@@ -1,82 +1,117 @@
-# Spond MCP
+<p align="center"><img src="assets/banner.jpg" alt="Spond MCP: a phone with a calendar connects to a team event and a group chat" width="100%"></p>
 
-English · [Norsk](README.no.md)
+<h1 align="center">Spond MCP</h1>
 
-Read Spond through a local, read-only MCP server. It can list you and the children you answer for, list groups, list events with your family's responses, read an event with its comments, and list group wall posts. It cannot answer invitations, send messages, or change Spond data.
+<p align="center">
+  <a href="https://github.com/kristoffervp/spond-mcp/actions/workflows/test.yml"><img src="https://github.com/kristoffervp/spond-mcp/actions/workflows/test.yml/badge.svg" alt="Test"></a>
+  <a href="https://github.com/kristoffervp/spond-mcp/releases"><img src="https://img.shields.io/github/v/release/kristoffervp/spond-mcp" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-0BSD-blue" alt="License: 0BSD"></a>
+</p>
 
-**Tested only on macOS.** Other platforms have not been tested. This project uses undocumented Spond endpoints that may change; Spond replaced its sign-in endpoint without notice in May 2026. It is not affiliated with or endorsed by Spond.
+<p align="center">English · <a href="README.no.md">Norsk</a></p>
 
-## Install
+A local, read-only MCP server that lets an AI client read your Spond events, group wall posts and chats. It can't answer invitations, send messages or change anything in Spond.
 
-Install Node.js 20 or later. No browser or other dependencies are needed. Download or clone this repository, open its folder in Terminal, and run:
+**Unofficial.** Not made by or affiliated with Spond AS. It uses undocumented endpoints that can change without notice.
+
+## Quick start
+
+You need Node.js 20 or later.
 
 ```sh
-npm ci
+git clone https://github.com/kristoffervp/spond-mcp.git
+cd spond-mcp
+npm install
 npm run login
 ```
 
-Enter your Spond email address and password. The password is read without echo and is never saved; only Spond's access and refresh tokens are stored in the private `.data/` folder. The access token lasts a day and renews automatically. The refresh token lasts 90 days and restarts with every renewal, so you only need to sign in again if the server goes unused for 90 days or Spond ends the session. Accounts with two-factor verification are not supported yet. Run `npm test` to check the project without using your account.
+`npm run login` asks for your Spond email or phone number and password, and `npm test` checks the server without using your account. Then add the server to your AI client as a local (stdio) server. For Claude Desktop, in `claude_desktop_config.json`:
 
-## Connect a local MCP client
-
-Add a **stdio MCP server** in your client:
-
-| Field | Value |
-| --- | --- |
-| Command | Absolute path to Node.js; find it with `command -v node` |
-| Arguments | One argument: absolute path to this project's `src/server.js` |
-| Working directory | Absolute path to this project folder |
-| Environment variables | None required |
-
-Save and restart the client, then check that `spond-local-mcp` is connected. In Claude Code, run this from the project folder instead:
-
-```sh
-claude mcp add spond -- "$(command -v node)" "$PWD/src/server.js"
+```json
+{
+  "mcpServers": {
+    "spond": {
+      "command": "node",
+      "args": ["/full/path/to/spond-mcp/src/server.js"]
+    }
+  }
+}
 ```
-
-`npm start` starts the server directly. A browser chat cannot launch a local stdio process by itself; follow your client's connection instructions.
 
 ## Tools
 
-| Tool | Purpose |
+| Tool | What it does |
 | --- | --- |
-| `list_family` | List you and the children you answer for, with their groups |
-| `list_groups` | List groups with subgroups, activity, and contact person; no member lists |
-| `list_events` | List events in a date range with times, meetup, location, and your family's responses |
-| `get_event` | Read one event with description, organizers, and comments |
-| `list_posts` | List recent group wall posts with comments |
-| `list_chats` | List recent chats, including group chats you follow as a guardian |
-| `get_chat` | Read the newest messages in one chat |
+| `list_family` | You and the children you answer for, with their groups and subgroups |
+| `list_groups` | Groups with subgroups, activity, club, contact person, member count and which family members belong. No member lists |
+| `list_events` | Events with times, meetup, location and your family's responses. `from_date` and `to_date` (`YYYY-MM-DD`) default to today and the next 14 days, at most 366 days. Filters: `group_id`, `only_unanswered` |
+| `get_event` | One event with description, organizers, comments and your family's responses |
+| `list_posts` | Recent group wall posts with comments, up to `limit` (1 to 50, default 20). Filter: `group_id`. `include_images` adds image links |
+| `list_chats` | Recent chats, also group chats you follow as a guardian, with the time, number (`newestNum`) and an excerpt of the newest message. Up to `limit` (1 to 50, default 20) |
+| `get_chat` | The newest messages in one chat, oldest first, up to `limit` (1 to 50, default 20). `max_num` reads further back. `include_images` adds image links |
 
-`list_events` covers today and the next 14 days by default. `from_date` and `to_date` accept `YYYY-MM-DD`, with a maximum range of 366 days. Pass a `group_id` from `list_groups` to see one group, or `only_unanswered: true` to see only events a family member has not answered. Each event lists every family member's response (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed`, or `unknown`) and counts the responses of everyone invited.
+Each event shows every family member's response (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed` or `unknown`) and counts the responses of everyone invited. Times are local, with the offset of your Spond profile's time zone, for example `2026-10-10T12:15+02:00`. Lists return at most 50 entries, and long text is shortened and marked. Results are returned as `structuredContent` and as JSON text, both marked as untrusted content from Spond.
 
-Times are local, with the offset of your Spond profile's time zone, for example `2026-10-10T12:15+02:00`. Lists return at most 50 entries, and `list_events` indicates truncation. `list_posts` takes a `limit` from 1 to 50 (default 20). Long text may be shortened and marked as such. Profile and groups are cached for five minutes, so group changes can take that long to appear.
+`asGuardian` marks chats you follow on behalf of a child, which is where parents' group chats usually are. When a chat has older messages, `get_chat` returns `olderBefore`, a number to pass as `max_num`. `fromFamily` marks messages from you or another guardian of your children. Deleted messages have no text.
 
-`list_chats` shows each chat's type (`group`, `dm`, and others), group, the time and number (`newestNum`) of the newest message, and an excerpt of it. `asGuardian` marks chats you follow on behalf of a child, which is where parents' group chats usually are. `get_chat` returns up to `limit` messages (1 to 50, default 20), oldest first. When older messages exist, `olderBefore` gives a number to pass as `max_num` to read further back. `fromFamily` marks messages from you or another guardian of your children. Deleted messages have no text.
+## How it works
 
-## Privacy and security
+The server runs on your computer and talks to the AI client over stdio. It uses the sign-in from `npm run login`, saved in `.data/`.
 
-The server runs locally over stdio and opens no listening port. A connected AI client can retrieve the Spond information you request. Content used with a cloud AI service may be sent to that service. Treat event descriptions, posts, comments, and chat messages as untrusted content, review tool calls, and use a client you trust.
+```mermaid
+flowchart LR
+  client["AI client<br/>Claude Desktop, ChatGPT …"]
+  subgraph computer["Your computer"]
+    server["MCP server<br/>src/server.js, mcp-format.js"]
+    spond["Spond client<br/>spond.js"]
+    auth["Sign-in and renewal<br/>auth.js"]
+    login["npm run login<br/>login.js"]
+    data[(".data/<br/>session.json<br/>(sign-in tokens)")]
+  end
+  api["Spond API<br/>api.spond.com"]
+  chat["Spond chat<br/>separate host on spond.com"]
+  client <-->|"MCP over stdio"| server
+  server --> spond
+  spond -->|"asks for a valid token"| auth
+  spond <-->|"HTTPS with the access token"| api
+  spond <-->|"HTTPS with a chat token,<br/>kept in memory"| chat
+  login -->|"email or phone<br/>and password"| auth
+  auth <-->|"sign in and renew"| api
+  auth -.->|"saves and reads the tokens"| data
+```
 
-Spond's group data includes other people's children and their guardians. The server returns other people by name only, as organizers, contact persons, and authors. Chats show the number of participants, not who they are. It never returns phone numbers, email addresses, birth dates, or member lists. Image links are returned only when you ask with `include_images: true` on `list_posts` or `get_chat`, because anyone with the link can open the image without signing in. Responses are shown per person only for your own family; everyone else is counted.
+## Configuration
 
-Spond limits request volume and has blocked IP addresses that sign in too often. The server uses your password only during `npm run login`, renews with the refresh token, and caches profile and groups.
+Set this in the client config (and in Terminal for `npm run login`):
 
-The tokens in `.data/` give access to your Spond account and must stay private. Delete `.data/session.json` to remove the local sign-in. The `.gitignore` allowlist keeps local data and machine-specific files out of a broad `git add .`.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SPOND_DATA_DIR` | `.data` in this folder | Where the sign-in is saved |
+
+## Troubleshooting
+
+- **"No Spond sign-in found" or "The Spond sign-in has expired".** Run `npm run login` again. The refresh token lasts 90 days and restarts with every renewal, so this happens after 90 days without use or when Spond ends the session.
+- **"This Spond account requires two-factor verification".** Accounts with two-factor verification are not supported yet.
+- **"Spond is limiting requests".** Wait a few minutes. Spond has blocked IP addresses that sign in too often, so don't run `npm run login` over and over.
+- **The sign-in stops working after `.data/` was copied to another computer.** Each renewal replaces the refresh token, so two copies can't both stay signed in. Run `npm run login` on each computer.
+- **"The Spond response is too large".** Narrow the request with `group_id`, a shorter date range or a lower `limit`.
+- **The client can't start the server.** Use full paths for both `node` (from `command -v node`) and `src/server.js`.
+- **Group changes don't show up.** Profile and groups are cached for five minutes.
+
+## Security and privacy
+
+- The server runs on your computer and opens no network port. Any AI client you connect can still read your Spond events, posts and chats, and a cloud AI service receives what the client reads. Decide what you are willing to share.
+- Text from Spond is passed on as information, not instructions. That can't stop every attempt to steer the AI. Use clients you trust and review tool calls.
+- Spond's group data includes other people's children and their guardians. The server returns other people by name only, and never returns phone numbers, email addresses, birth dates or member lists. Responses are shown per person only for your own family. Chats show the number of participants, not who they are.
+- Image links are returned only with `include_images: true`, because anyone with the link can open the image without signing in.
+- The password is read without echo and never saved. `.data/session.json` holds tokens that give access to your Spond account. Never share it, and delete it to remove the sign-in.
+- Requests go only to `api.spond.com` and to a chat host on `spond.com` over HTTPS, and redirects are not followed. Errors shown to the client never include tokens or personal data.
+- To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Changelog
 
-### 0.3.0
-- `list_posts` and `get_chat` take `include_images: true` to also return image links (only `https://spond.com` addresses). Without it, nothing changes.
-- `hasImage` is now set on chat messages with images; Spond sends them as `images`, not `image`.
-
-### 0.2.0
-- New tools `list_chats` and `get_chat` read Spond chats, including the group chats you follow as a guardian. Messages from you and the other guardians of your children are marked `fromFamily`.
-- The chat token is kept in memory only and is replaced once if it expires. Chat requests only go to a `spond.com` host over HTTPS.
-
-### 0.1.0
-- First version: `list_family`, `list_groups`, `list_events`, `get_event`, and `list_posts`.
+See [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/kristoffervp/spond-mcp/releases).
 
 ## License
 
-Code and documentation use the [0BSD license](LICENSE). This does not cover Spond's service or retrieved data.
+[0BSD](LICENSE): use, change and share it freely, also commercially, without attribution. It does not cover the Spond service or its data.
