@@ -58,13 +58,17 @@ Tidspunkter er lokale, med tidssonen fra Spond-profilen din, for eksempel `2026-
 
 Serveren kjører lokalt via stdio og åpner ingen lyttende nettverksport. En tilkoblet KI-klient kan hente Spond-informasjonen du ber om. Innhold brukt med en skybasert KI-tjeneste kan bli sendt dit. Behandle beskrivelser, innlegg, kommentarer og chatmeldinger som ikke-betrodd innhold, se gjennom verktøykall og bruk en klient du stoler på.
 
-Sponds gruppedata inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, som arrangør, kontaktperson eller forfatter. Chatter viser antall deltakere, ikke hvem de er. Den returnerer aldri telefonnumre, e-postadresser, fødselsdatoer, medlemslister eller bildelenker. Svar vises per person bare for din egen familie; for alle andre vises antall.
+Sponds gruppedata inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, som arrangør, kontaktperson eller forfatter. Chatter viser antall deltakere, ikke hvem de er. Den returnerer aldri telefonnumre, e-postadresser, fødselsdatoer eller medlemslister. Bildelenker kommer bare når du ber om dem med `include_images: true` på `list_posts` eller `get_chat`, fordi alle som har lenken, kan åpne bildet uten å logge inn. Svar vises per person bare for din egen familie; for alle andre vises antall.
 
 Spond begrenser antall forespørsler og har blokkert IP-adresser som logger inn for ofte. Serveren bruker passordet ditt bare under `npm run login`, fornyer med fornyelsestokenet og mellomlagrer profil og grupper.
 
 Tokenene i `.data/` gir tilgang til Spond-kontoen din og må holdes private. Slett `.data/session.json` for å fjerne den lokale innloggingen. Tillatelseslisten i `.gitignore` holder lokale data og maskinspesifikke filer unna en bred `git add .`.
 
 ## Endringslogg
+
+### 0.3.0
+- `list_posts` og `get_chat` tar `include_images: true` for også å gi bildelenker (bare `https://spond.com`-adresser). Uten den er alt som før.
+- `hasImage` settes nå på chatmeldinger med bilder. Spond sender dem som `images`, ikke `image`.
 
 ### 0.2.0
 - Nye verktøy `list_chats` og `get_chat` leser chatter i Spond, også gruppechatter du følger som foresatt. Meldinger fra deg og de andre foresatte til barna dine merkes `fromFamily`.
