@@ -58,13 +58,17 @@ Times are local, with the offset of your Spond profile's time zone, for example 
 
 The server runs locally over stdio and opens no listening port. A connected AI client can retrieve the Spond information you request. Content used with a cloud AI service may be sent to that service. Treat event descriptions, posts, comments, and chat messages as untrusted content, review tool calls, and use a client you trust.
 
-Spond's group data includes other people's children and their guardians. The server returns other people by name only, as organizers, contact persons, and authors. Chats show the number of participants, not who they are. It never returns phone numbers, email addresses, birth dates, member lists, or image links. Responses are shown per person only for your own family; everyone else is counted.
+Spond's group data includes other people's children and their guardians. The server returns other people by name only, as organizers, contact persons, and authors. Chats show the number of participants, not who they are. It never returns phone numbers, email addresses, birth dates, or member lists. Image links are returned only when you ask with `include_images: true` on `list_posts` or `get_chat`, because anyone with the link can open the image without signing in. Responses are shown per person only for your own family; everyone else is counted.
 
 Spond limits request volume and has blocked IP addresses that sign in too often. The server uses your password only during `npm run login`, renews with the refresh token, and caches profile and groups.
 
 The tokens in `.data/` give access to your Spond account and must stay private. Delete `.data/session.json` to remove the local sign-in. The `.gitignore` allowlist keeps local data and machine-specific files out of a broad `git add .`.
 
 ## Changelog
+
+### 0.3.0
+- `list_posts` and `get_chat` take `include_images: true` to also return image links (only `https://spond.com` addresses). Without it, nothing changes.
+- `hasImage` is now set on chat messages with images; Spond sends them as `images`, not `image`.
 
 ### 0.2.0
 - New tools `list_chats` and `get_chat` read Spond chats, including the group chats you follow as a guardian. Messages from you and the other guardians of your children are marked `fromFamily`.

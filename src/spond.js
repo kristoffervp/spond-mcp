@@ -32,6 +32,21 @@ function longText(target, key, value) {
   if (value.length > maxTextChars) target[`${key}Truncated`] = true;
 }
 
+// Image links only on request (include_images), and only to Spond's own https hosts.
+function imageUrls(value) {
+  return list(value).map((image) => str(image?.url, 2_048)).filter((url) => {
+    try {
+      const { protocol, hostname } = new URL(url);
+      return protocol === 'https:' && (hostname === 'spond.com' || hostname.endsWith('.spond.com'));
+    } catch { return false; }
+  }).slice(0, 10);
+}
+
+function includeImages(value) {
+  if (typeof value !== 'boolean') throw new PublicError('include_images must be true or false.');
+  return value;
+}
+
 function fullName(person) {
   return str([person?.firstName, person?.lastName].filter((part) => typeof part === 'string' && part).join(' '));
 }
@@ -348,7 +363,8 @@ export class Spond {
     return { timeZone: context.timeZone, ...this.#event(event, context, { full: true }) };
   }
 
-  async listPosts({ group_id, limit = 20 } = {}) {
+  async listPosts({ group_id, limit = 20, include_images = false } = {}) {
+    includeImages(include_images);
     const groupId = group_id === undefined ? undefined : spondId(group_id, 'group_id');
     if (!Number.isInteger(limit) || limit < 1 || limit > maxItems) throw new PublicError(`limit must be an integer from 1 to ${maxItems}.`);
     const context = await this.#context();
@@ -365,6 +381,7 @@ export class Spond {
       longText(result, 'text', post?.body);
       if (post?.unread === true) result.unread = true;
       if (list(post?.media).length > 0) result.imageCount = post.media.length;
+      if (include_images && imageUrls(post?.media).length > 0) result.images = imageUrls(post.media);
       if (list(post?.attachments).length > 0) result.attachmentCount = post.attachments.length;
       result.comments = comments(post?.comments, people, timeZone);
       result.commentCount = list(post?.comments).length;
@@ -373,7 +390,7 @@ export class Spond {
     return { timeZone, items, total: items.length };
   }
 
-  #message(message, context, { excerpt = false } = {}) {
+  #message(message, context, { excerpt = false, images = false } = {}) {
     const { people, familyProfiles, timeZone } = context;
     const result = {};
     if (Number.isInteger(message?.msgNum)) result.num = message.msgNum;
@@ -390,7 +407,8 @@ export class Spond {
     } else {
       longText(result, 'text', message?.text);
     }
-    if (message?.image) result.hasImage = true;
+    if (message?.image || list(message?.images).length > 0) result.hasImage = true;
+    if (images && imageUrls(message?.images).length > 0) result.images = imageUrls(message.images);
     if (message?.file) result.hasFile = true;
     if (typeof message?.spond?.id === 'string') result.event = { id: message.spond.id, title: str(message.spond.heading) };
     if (typeof message?.post?.id === 'string') result.post = { id: message.post.id, title: str(message.post.title) };
@@ -428,8 +446,9 @@ export class Spond {
     return { timeZone, items: items.slice(0, limit), total: items.length, truncated: items.length > limit };
   }
 
-  async getChat({ chat_id, limit = 20, max_num } = {}) {
+  async getChat({ chat_id, limit = 20, max_num, include_images = false } = {}) {
     const id = chatId(chat_id);
+    includeImages(include_images);
     limitValue(limit);
     if (max_num !== undefined && (!Number.isInteger(max_num) || max_num < 1)) throw new PublicError('max_num must be a positive integer.');
     const context = await this.#context();
@@ -437,7 +456,7 @@ export class Spond {
     const data = await this.#chatRequest(`/chats/${id}/messages`, query);
     if (!Array.isArray(data)) throw new PublicError('Spond sent an unexpected response.');
     const messages = data.filter((message) => message && typeof message === 'object').slice(0, limit)
-      .map((message) => this.#message(message, context))
+      .map((message) => this.#message(message, context, { images: include_images }))
       .sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
     const result = { timeZone: context.timeZone, chatId: id, messages };
     if (messages.length > 0 && messages[0].num > 1 && data.length >= limit) result.olderBefore = messages[0].num;

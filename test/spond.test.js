@@ -50,7 +50,7 @@ const afterRange = { id: id('e3'), heading: 'Late', startTimestamp: '2026-10-31T
   recipients: { group: { id: G1 } }, responses: responses({ unansweredIds: [CHILD1] }), behalfOfIds: [CHILD1] };
 const posts = [{ id: id('p1'), type: 'PLAIN', groupId: G1, subGroupIds: [S1], title: 'Kit day', body: 'New shirts',
   ownerId: COACH, timestamp: '2026-10-01T08:00:00.000Z', unread: true,
-  media: [{ url: SECRET, thumbnailUrl: SECRET }], attachments: [],
+  media: [{ url: 'https://spond.com/images/def/kit.jpg', thumbnailUrl: SECRET }], attachments: [],
   comments: [{ id: 'c4', fromProfileId: OTHER_PARENT, timestamp: '2026-10-01T09:00:00.000Z', text: 'Great', children: [] }] }];
 
 function fake(routes) {
@@ -130,7 +130,7 @@ test('one event includes description, organizers, and comment authors by name', 
   assert.equal(JSON.stringify(event).includes(SECRET), false);
 });
 
-test('posts give group names and authors but no media links', async () => {
+test('posts give group names and authors, and image links only on request', async () => {
   const { spond, calls } = fake({ ...base, '/core/v1/posts/': posts });
   const result = await spond.listPosts({ group_id: G1, limit: 5 });
   assert.deepEqual(Object.fromEntries(calls.at(-1).url.searchParams),
@@ -139,6 +139,10 @@ test('posts give group names and authors but no media links', async () => {
     time: '2026-10-01T10:00+02:00', subGroups: ['Team Blue'], text: 'New shirts', unread: true, imageCount: 1,
     comments: [{ author: 'Olga Other', time: '2026-10-01T11:00+02:00', text: 'Great' }], commentCount: 1 });
   assert.equal(JSON.stringify(result).includes(SECRET), false);
+  assert.equal(JSON.stringify(result).includes('spond.com/images'), false);
+  const withImages = await spond.listPosts({ limit: 5, include_images: true });
+  assert.deepEqual(withImages.items[0].images, ['https://spond.com/images/def/kit.jpg']);
+  await assert.rejects(spond.listPosts({ include_images: 'yes' }), /include_images/);
 });
 
 test('invalid arguments are rejected before any network call', async () => {
@@ -191,7 +195,8 @@ const chatMessages = [
   { msgNum: 7, user: PARTNER, text: 'Kim comes!', timestamp: '2026-11-20T18:05:00.000Z', type: 'TEXT' },
   { msgNum: 6, user: OTHER_PARENT, type: 'DELETED', text: SECRET, timestamp: '2026-11-20T17:00:00.000Z' },
   { msgNum: 5, user: OTHER_PARENT, text: 'Party for Alex on Saturday 12-14 in the gym', timestamp: '2026-11-19T19:00:00.000Z',
-    image: { url: SECRET }, reactions: { [ME]: 'heart' } },
+    images: [{ url: 'https://spond.com/images/abc/party.jpg', width: 800, height: 600 }, { url: 'https://evil.example/x.jpg' }],
+    reactions: { [ME]: 'heart' } },
   { msgNum: 4, user: id('stranger'), text: 'Hi', timestamp: '2026-11-19T18:00:00.000Z',
     spond: { id: training.id, heading: 'Training', group: { members: [{ phoneNumber: SECRET }] } } },
 ];
@@ -216,7 +221,7 @@ test('chats merge own and guardian chats, mark the family, and use the chat host
   assert.equal(JSON.stringify(result).includes(SECRET), false);
 });
 
-test('one chat gives messages oldest first without deleted text, media links, or contact data', async () => {
+test('one chat gives messages oldest first without deleted text or contact data, and image links only on request', async () => {
   const { spond, calls } = fake(chatRoutes());
   const result = await spond.getChat({ chat_id: C1, limit: 4 });
   assert.deepEqual(Object.fromEntries(calls.at(-1).url.searchParams), { count: '4' });
@@ -230,6 +235,11 @@ test('one chat gives messages oldest first without deleted text, media links, or
   await spond.getChat({ chat_id: C1, limit: 20, max_num: 4 });
   assert.deepEqual(Object.fromEntries(calls.at(-1).url.searchParams), { count: '20', maxNum: '4' });
   assert.equal(calls.filter((call) => call.url.pathname === '/core/v1/chat').length, 1);
+  assert.equal(JSON.stringify(result).includes('spond.com/images'), false);
+  const withImages = await spond.getChat({ chat_id: C1, limit: 4, include_images: true });
+  assert.deepEqual(withImages.messages[1].images, ['https://spond.com/images/abc/party.jpg']);
+  assert.equal(JSON.stringify(withImages).includes('evil.example'), false);
+  await assert.rejects(spond.getChat({ chat_id: C1, include_images: 1 }), /include_images/);
 });
 
 test('an expired chat token is replaced once, and unexpected chat hosts are refused', async () => {
