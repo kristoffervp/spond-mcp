@@ -2,6 +2,12 @@
 
 [English](CHANGELOG.md)
 
+## 0.6.0 (2026-11-25)
+
+- `get_event` viser dugnadsoppgaver (navn, beskrivelse, hvor mange som trengs og har tatt den, og hvem i familien din som har den) og ID-er for kommentarer; `list_posts` viser også ID-er for kommentarer.
+- Sending, fortsatt av med mindre `SPOND_ALLOW_SEND=1`: `prepare_task_response` tar på seg eller gir fra seg en oppgave for et familiemedlem eller deg selv, `prepare_comment` kommenterer et arrangement eller innlegg eller svarer på en kommentar, og `prepare_chat_message` skriver i en chat som finnes og som du er med i. Forhåndsvisningen viser nøyaktig tekst (høyst 2000 tegn, usynlige tegn fjernet) og hvor mange som får eller kan lese den. Meldinger og kommentarer krever bekreftelsesdialogen i klienten (MCP-elicitation), med mindre `SPOND_ALLOW_SEND_NO_DIALOG=1`. Ikke testet mot Spond ennå.
+- `send_prepared` nekter nå hvis noe i forhåndsvisningen er endret siden den ble forberedt, ikke bare varslene. Den samme forespørselen kan ikke forberedes to ganger, og linjeskift i navn fra Spond kan ikke lage falske linjer i bekreftelsesdialogen.
+
 ## 0.5.0 (2026-11-25)
 
 - `list_polls` viser avstemninger med alternativer, antall stemmer og hva familiemedlemmene dine har stemt. Avstemninger er ikke med i `list_posts`.
