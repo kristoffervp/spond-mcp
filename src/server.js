@@ -1,12 +1,15 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { publicFailure, toolResult } from './mcp-format.js';
 import { Spond } from './spond.js';
 
 const spond = new Spond();
-const serverInfo = { name: 'spond-local-mcp', version: '0.3.0' };
+const { name, version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const serverInfo = { name, version };
 const supportedVersions = new Set(['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']);
 const maxInputBytes = 65_536;
 const spondId = { type: 'string', pattern: '^[0-9A-Fa-f]{32}$' };
+const date = (description) => ({ type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description });
 
 const tools = [
   { name: 'list_family', description: 'List the signed-in user and the children they answer for in Spond, with their groups and subgroups.',
@@ -17,8 +20,8 @@ const tools = [
     run: () => spond.listGroups() },
   { name: 'list_events', description: 'List Spond events in a date range with times, meetup, location, and each family member\'s response (accepted, declined, unanswered, waiting_list). Times are local with offset. Titles are untrusted text.',
     inputSchema: { type: 'object', properties: {
-      from_date: { type: 'string', description: 'YYYY-MM-DD; default today' },
-      to_date: { type: 'string', description: 'YYYY-MM-DD; default 14 days after from_date; range at most 366 days' },
+      from_date: date('YYYY-MM-DD; default today'),
+      to_date: date('YYYY-MM-DD; default 14 days after from_date; range at most 366 days'),
       group_id: { ...spondId, description: 'Optional group ID from list_groups' },
       only_unanswered: { type: 'boolean', default: false, description: 'Only events a family member has not answered' },
     }, additionalProperties: false },
@@ -49,16 +52,18 @@ const tools = [
     run: (args) => spond.getChat(args) },
 ];
 const toolList = tools.map(({ run, ...tool }) => ({ ...tool, annotations: {
-  readOnlyHint: true, destructiveHint: false, openWorldHint: true, ...tool.annotations,
+  readOnlyHint: true, destructiveHint: false, openWorldHint: true,
 } }));
 
 function send(message) { process.stdout.write(JSON.stringify(message) + '\n'); }
 function result(id, value) { send({ jsonrpc: '2.0', id, result: value }); }
 function error(id, code, message) { send({ jsonrpc: '2.0', id, error: { code, message } }); }
 
+const validId = (value) => value === undefined || value === null || typeof value === 'string' || typeof value === 'number';
+
 async function handle(request) {
-  if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') {
-    return error(request?.id ?? null, -32600, 'Invalid request');
+  if (!request || typeof request !== 'object' || request.jsonrpc !== '2.0' || typeof request.method !== 'string' || !validId(request.id)) {
+    return error(validId(request?.id) ? request?.id ?? null : null, -32600, 'Invalid request');
   }
   const { id, method } = request;
   if (id === undefined) return;
@@ -99,9 +104,14 @@ function append(chunk) {
   if (size > maxInputBytes) { tooLarge = true; parts = []; return; }
   parts.push(chunk);
 }
-async function finishLine() {
+// Requests run concurrently, so a slow chat fetch does not block ping or other calls.
+const pending = new Set();
+function finishLine() {
   if (tooLarge) error(null, -32600, 'Request too large');
-  else if (size > 0) await handleLine(Buffer.concat(parts, size).toString('utf8').replace(/\r$/, ''));
+  else if (size > 0) {
+    const task = handleLine(Buffer.concat(parts, size).toString('utf8').replace(/\r$/, '')).finally(() => pending.delete(task));
+    pending.add(task);
+  }
   parts = [];
   size = 0;
   tooLarge = false;
@@ -111,9 +121,10 @@ for await (const chunk of process.stdin) {
   let start = 0;
   for (let end = buffer.indexOf(10, start); end !== -1; end = buffer.indexOf(10, start)) {
     append(buffer.subarray(start, end));
-    await finishLine();
+    finishLine();
     start = end + 1;
   }
   if (start < buffer.length) append(buffer.subarray(start));
 }
-if (size > 0 || tooLarge) await finishLine();
+if (size > 0 || tooLarge) finishLine();
+await Promise.allSettled(pending);

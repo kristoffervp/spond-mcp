@@ -22,13 +22,18 @@ function list(value) {
   return Array.isArray(value) ? value : [];
 }
 
+// Format and control characters (direction overrides, zero-width and Unicode tag characters) can hide text
+// from the parent while an AI client still reads it. toWellFormed repairs an emoji cut in half by slice.
+const invisibleCharacters = /(?![\n\t])[\p{Cf}\p{Cc}]/gu;
+const clean = (text) => text.toWellFormed().replace(invisibleCharacters, '');
+
 function str(value, max = 1_024) {
-  return typeof value === 'string' && value ? value.slice(0, max) : undefined;
+  return typeof value === 'string' && value ? clean(value.slice(0, max)) || undefined : undefined;
 }
 
 function longText(target, key, value) {
   if (typeof value !== 'string' || !value) return;
-  target[key] = value.slice(0, maxTextChars);
+  target[key] = clean(value.slice(0, maxTextChars));
   if (value.length > maxTextChars) target[`${key}Truncated`] = true;
 }
 
@@ -84,13 +89,16 @@ function limitValue(value) {
 
 // Spond sends UTC timestamps; agents get local wall-clock time with its offset, e.g. 2026-10-09T19:30+02:00.
 // The chat host may send epoch milliseconds instead of ISO strings.
+// One formatter per time zone: building one per timestamp is slow on a Raspberry Pi.
+const formatters = new Map();
 function localTime(value, timeZone) {
   const time = typeof value === 'string' ? Date.parse(value) : typeof value === 'number' ? value : NaN;
   if (!Number.isFinite(time)) return undefined;
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+  if (!formatters.has(timeZone)) formatters.set(timeZone, new Intl.DateTimeFormat('en-US', {
     timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', timeZoneName: 'longOffset',
-  }).formatToParts(time).map(({ type, value: part }) => [type, part]));
+  }));
+  const parts = Object.fromEntries(formatters.get(timeZone).formatToParts(time).map(({ type, value: part }) => [type, part]));
   const offset = parts.timeZoneName === 'GMT' ? '+00:00' : parts.timeZoneName.slice(3);
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}${offset}`;
 }
@@ -194,8 +202,12 @@ export class Spond {
           redirect: 'manual', signal: AbortSignal.timeout(30_000),
         });
       } catch { throw new PublicError('Could not reach Spond chat. Check the network and retry.'); }
-      // The chat token can expire before the sign-in does: get a new one once.
-      if ((response.status === 401 || response.status === 403) && attempt === 0) continue;
+      // The chat token can expire before the sign-in does: get a new one once. The sign-in itself worked to get
+      // the token, so a second refusal is not a reason to sign in again (Spond blocks IPs that sign in too often).
+      if (response.status === 401 || response.status === 403) {
+        if (attempt === 0) continue;
+        throw new PublicError('Spond chat refused access. Retry later; the sign-in itself still works.');
+      }
       return this.#checked(response);
     }
   }
@@ -366,7 +378,7 @@ export class Spond {
   async listPosts({ group_id, limit = 20, include_images = false } = {}) {
     includeImages(include_images);
     const groupId = group_id === undefined ? undefined : spondId(group_id, 'group_id');
-    if (!Number.isInteger(limit) || limit < 1 || limit > maxItems) throw new PublicError(`limit must be an integer from 1 to ${maxItems}.`);
+    limitValue(limit);
     const context = await this.#context();
     const { groupNames, people, timeZone } = context;
     const data = await this.#request('/posts/', {
@@ -381,7 +393,8 @@ export class Spond {
       longText(result, 'text', post?.body);
       if (post?.unread === true) result.unread = true;
       if (list(post?.media).length > 0) result.imageCount = post.media.length;
-      if (include_images && imageUrls(post?.media).length > 0) result.images = imageUrls(post.media);
+      const images = include_images ? imageUrls(post?.media) : [];
+      if (images.length > 0) result.images = images;
       if (list(post?.attachments).length > 0) result.attachmentCount = post.attachments.length;
       result.comments = comments(post?.comments, people, timeZone);
       result.commentCount = list(post?.comments).length;
@@ -403,15 +416,16 @@ export class Spond {
     if (type === 'deleted') return result;
     if (excerpt) {
       const text = str(message?.text, maxExcerptChars + 1);
-      if (text) result.text = text.length > maxExcerptChars ? `${text.slice(0, maxExcerptChars)}…` : text;
+      if (text) result.text = text.length > maxExcerptChars ? `${clean(text.slice(0, maxExcerptChars))}…` : text;
     } else {
       longText(result, 'text', message?.text);
     }
     if (message?.image || list(message?.images).length > 0) result.hasImage = true;
-    if (images && imageUrls(message?.images).length > 0) result.images = imageUrls(message.images);
+    const imageLinks = images ? imageUrls(message?.images) : [];
+    if (imageLinks.length > 0) result.images = imageLinks;
     if (message?.file) result.hasFile = true;
-    if (typeof message?.spond?.id === 'string') result.event = { id: message.spond.id, title: str(message.spond.heading) };
-    if (typeof message?.post?.id === 'string') result.post = { id: message.post.id, title: str(message.post.title) };
+    if (typeof message?.spond?.id === 'string') result.event = { id: str(message.spond.id, 64), title: str(message.spond.heading) };
+    if (typeof message?.post?.id === 'string') result.post = { id: str(message.post.id, 64), title: str(message.post.title) };
     return result;
   }
 
@@ -459,7 +473,8 @@ export class Spond {
       .map((message) => this.#message(message, context, { images: include_images }))
       .sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
     const result = { timeZone: context.timeZone, chatId: id, messages };
-    if (messages.length > 0 && messages[0].num > 1 && data.length >= limit) result.olderBefore = messages[0].num;
+    // Spond numbers messages from 0, so a first message numbered 1 still has an older one.
+    if (messages.length > 0 && messages[0].num > 0 && data.length >= limit) result.olderBefore = messages[0].num;
     return result;
   }
 }

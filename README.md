@@ -21,7 +21,6 @@ You need Node.js 20 or later.
 ```sh
 git clone https://github.com/kristoffervp/spond-mcp.git
 cd spond-mcp
-npm install
 npm run login
 ```
 
@@ -92,6 +91,7 @@ Set this in the client config (and in Terminal for `npm run login`):
 
 - **"No Spond sign-in found" or "The Spond sign-in has expired".** Run `npm run login` again. The refresh token lasts 90 days and restarts with every renewal, so this happens after 90 days without use or when Spond ends the session.
 - **"This Spond account requires two-factor verification".** Accounts with two-factor verification are not supported yet.
+- **"Spond chat refused access".** The chat host turned down a fresh chat token. Try again later; the sign-in itself still works, so don't sign in again.
 - **"Spond is limiting requests".** Wait a few minutes. Spond has blocked IP addresses that sign in too often, so don't run `npm run login` over and over.
 - **The sign-in stops working after `.data/` was copied to another computer.** Each renewal replaces the refresh token, so two copies can't both stay signed in. Run `npm run login` on each computer.
 - **"The Spond response is too large".** Narrow the request with `group_id`, a shorter date range or a lower `limit`.
@@ -105,7 +105,7 @@ Set this in the client config (and in Terminal for `npm run login`):
 - Spond's group data includes other people's children and their guardians. The server returns other people by name only, and never returns phone numbers, email addresses, birth dates or member lists. Responses are shown per person only for your own family. Chats show the number of participants, not who they are.
 - Image links are returned only with `include_images: true`, because anyone with the link can open the image without signing in.
 - The password is read without echo and never saved. `.data/session.json` holds tokens that give access to your Spond account. Never share it, and delete it to remove the sign-in.
-- Requests go only to `api.spond.com` and to a chat host on `spond.com` over HTTPS, and redirects are not followed. Errors shown to the client never include tokens or personal data.
+- Requests go only to `api.spond.com` and to a chat host on `spond.com` over HTTPS, and redirects are not followed. Errors shown to the client never include tokens or personal data. Invisible characters that can hide instructions from you but not from the AI are removed from all text.
 - To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Changelog

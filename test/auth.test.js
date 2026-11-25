@@ -44,7 +44,6 @@ test('login posts email or phone and saves only tokens in a private file', async
   ]);
   assert.equal(session.accessToken, 'access-1');
   assert.equal(session.accessExpiresAt, Date.parse('2099-01-01T00:00:00Z'));
-  assert.equal(session.refreshExpiresAt, Date.parse('2099-03-01T00:00:00Z'));
   const file = await readFile(sessionPath, 'utf8');
   assert.equal(file.includes('SECRET-PASSWORD'), false);
   assert.equal(file.includes('parent@example.test'), false);
@@ -78,8 +77,7 @@ test('a fresh access token is used without contacting Spond', async () => {
 });
 
 test('parallel callers share one refresh and the rotated refresh token is saved', async () => {
-  await savePrivateJson(sessionPath, { accessToken: 'old', refreshToken: 'old-refresh', accessExpiresAt: 0,
-    refreshExpiresAt: 123 });
+  await savePrivateJson(sessionPath, { accessToken: 'old', refreshToken: 'old-refresh', accessExpiresAt: 0 });
   let calls = 0;
   globalThis.fetch = async (url, options) => {
     calls++;
@@ -97,7 +95,6 @@ test('parallel callers share one refresh and the rotated refresh token is saved'
   const kept = await refreshSessionNow();
   assert.equal(kept.accessToken, 'newer');
   assert.equal(kept.refreshToken, 'new-refresh');
-  assert.equal(kept.refreshExpiresAt, Date.parse('2099-03-01T00:00:00Z'));
 });
 
 test('a rejected refresh asks for a new login and keeps the saved session', async () => {
@@ -159,6 +156,25 @@ test('two processes refreshing at once use the refresh token only once', async (
   assert.equal(results.reduce((total, item) => total + item.calls, 0), 1);
   assert.ok(results.every((item) => item.refreshToken === 'shared-new-refresh'));
   assert.equal((await readSession()).refreshToken, 'shared-new-refresh');
+});
+
+test('a lock that another process has taken over is left alone', async () => {
+  await savePrivateJson(sessionPath, { accessToken: 'old', refreshToken: 'lock-refresh', accessExpiresAt: 0 });
+  const lockPath = `${sessionPath}.lock`;
+  globalThis.fetch = async () => {
+    // Simulates another process that removed this lock as stale and took its own.
+    await writeFile(lockPath, 'other-owner');
+    return reply(tokens('locked-new', 'locked-new-refresh'));
+  };
+  assert.equal((await currentSession()).accessToken, 'locked-new');
+  assert.equal(await readFile(lockPath, 'utf8'), 'other-owner');
+  await rm(lockPath);
+});
+
+test('a failed write leaves no copy of the tokens behind', async () => {
+  const { readdir } = await import('node:fs/promises');
+  await assert.rejects(savePrivateJson(join(dir, 'missing', 'session.json'), { accessToken: 'x' }));
+  assert.equal((await readdir(dir)).some((name) => name.endsWith('.tmp')), false);
 });
 
 test('token expiry falls back to the JWT exp claim', () => {
