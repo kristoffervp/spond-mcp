@@ -2,6 +2,10 @@
 
 [Norsk](CHANGELOG.no.md)
 
+## 0.6.1 (2026-11-25)
+
+- Comments and replies in `get_event` and `list_posts` from you or another guardian of your children get `fromFamily`, as chat messages do.
+
 ## 0.6.0 (2026-11-25)
 
 - `get_event` shows volunteer tasks (name, description, how many are needed and have taken it, and who in your family has it) and comment IDs; `list_posts` shows comment IDs too.

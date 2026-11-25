@@ -182,12 +182,15 @@ function pollSummary(poll, family, timeZone) {
   return result;
 }
 
-function comments(value, people, timeZone, nested = false) {
+function comments(value, context, nested = false) {
+  const { people, familyProfiles, timeZone } = context;
   return list(value).slice(-maxComments).map((comment) => {
     const result = { ...(typeof comment?.id === 'string' && optionIdPattern.test(comment.id) ? { id: comment.id } : {}),
-      author: people.get(comment?.fromProfileId) || 'Unknown', time: localTime(comment?.timestamp, timeZone) };
+      author: people.get(comment?.fromProfileId) || 'Unknown' };
+    if (familyProfiles.has(comment?.fromProfileId)) result.fromFamily = true;
+    result.time = localTime(comment?.timestamp, timeZone);
     longText(result, 'text', comment?.text);
-    if (!nested && list(comment?.children).length > 0) result.replies = comments(comment.children, people, timeZone, true);
+    if (!nested && list(comment?.children).length > 0) result.replies = comments(comment.children, context, true);
     return result;
   });
 }
@@ -421,7 +424,7 @@ export class Spond {
       const creator = people.get(event?.creatorId);
       if (creator) result.createdBy = creator;
       if (list(event?.attachments).length > 0) result.attachmentCount = event.attachments.length;
-      result.comments = comments(event?.comments, people, timeZone);
+      result.comments = comments(event?.comments, context);
       result.commentCount = list(event?.comments).length;
       if (event?.commentsDisabled === true) result.commentsDisabled = true;
       // Who has a task is shown by name only for the family; others are counted.
@@ -520,7 +523,7 @@ export class Spond {
       const images = include_images ? imageUrls(post?.media) : [];
       if (images.length > 0) result.images = images;
       if (list(post?.attachments).length > 0) result.attachmentCount = post.attachments.length;
-      result.comments = comments(post?.comments, people, timeZone);
+      result.comments = comments(post?.comments, context);
       result.commentCount = list(post?.comments).length;
       return result;
     });
