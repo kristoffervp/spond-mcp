@@ -30,7 +30,7 @@ export const clean = (text) => String(text ?? '').toWellFormed().replace(/[\u202
   .replace(/([\uFE00-\uFE0F])[\uFE00-\uFE0F]+/g, '$1');
 
 // Once a write has left, a lost answer does not mean it was not applied, so it is never reported as safe to retry.
-const uncertain = 'It may have been sent. Check list_events or list_polls before preparing again.';
+const uncertain = 'It may have been sent. Check in Spond (get_event, list_posts, list_polls or get_chat) before preparing again.';
 
 function str(value, max = 1_024) {
   return typeof value === 'string' && value ? clean(value.slice(0, max)) || undefined : undefined;
@@ -184,12 +184,61 @@ function pollSummary(poll, family, timeZone) {
 
 function comments(value, people, timeZone, nested = false) {
   return list(value).slice(-maxComments).map((comment) => {
-    const result = { author: people.get(comment?.fromProfileId) || 'Unknown', time: localTime(comment?.timestamp, timeZone) };
+    const result = { ...(typeof comment?.id === 'string' && optionIdPattern.test(comment.id) ? { id: comment.id } : {}),
+      author: people.get(comment?.fromProfileId) || 'Unknown', time: localTime(comment?.timestamp, timeZone) };
     longText(result, 'text', comment?.text);
     if (!nested && list(comment?.children).length > 0) result.replies = comments(comment.children, people, timeZone, true);
     return result;
   });
 }
+
+// Text the parent sends. At most 2,000 characters (Spond allows 4,096), so the whole text fits in the confirmation dialog.
+const maxSendText = 2_000;
+function sendText(value) {
+  const text = typeof value === 'string' ? clean(value).replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim() : '';
+  if (!text) throw new PublicError('text must be non-empty.');
+  if (text.length > maxSendText) throw new PublicError(`text can be at most ${maxSendText} characters.`);
+  return text;
+}
+
+// A message or comment that many people get carries a warning in its preview.
+const largeAudience = 30;
+const audienceWarnings = (count) => (count > largeAudience ? { warnings: [`${count} people get or can read this.`] } : {});
+
+// Names in a preview are kept short, so the confirmation dialog always has room for the whole text.
+const short = (value) => str(value, 200);
+const ids = (value) => list(value).map((item) => (typeof item === 'string' ? item : item?.id)).filter((item) => typeof item === 'string');
+
+// A volunteer task on an event (cake baking, driving). Open tasks are taken by anyone, up to limit; assigned tasks
+// are given to people by the organizer, who then accept or decline.
+function eventTasks(event) {
+  return [...list(event?.tasks?.openTasks).map((task) => [task, 'open']), ...list(event?.tasks?.assignedTasks).map((task) => [task, 'assigned'])]
+    .filter(([task]) => typeof task?.id === 'string' && optionIdPattern.test(task.id))
+    .map(([task, type]) => {
+      const limit = type === 'open' && Number.isInteger(task.limit) && task.limit > 0 ? task.limit : undefined;
+      const accepted = ids(task.accepted);
+      return { id: task.id, type, name: str(task.name), description: str(task.description), adultsOnly: task.adultsOnly === true,
+        limit, remaining: limit === undefined ? undefined : Number.isInteger(task.remaining) ? task.remaining : limit - accepted.length,
+        accepted, declined: ids(task.declined), unanswered: ids(task.unanswered) };
+    });
+}
+
+function taskStatus(task, id) {
+  if (task.accepted.includes(id)) return 'taken';
+  if (task.declined.includes(id)) return 'declined';
+  return task.unanswered.includes(id) ? 'asked' : 'not_taken';
+}
+
+const hex = '[0-9A-F]{32}';
+const key = '[0-9A-Za-z_-]{1,64}';
+const apiWrites = [
+  ['PUT', new RegExp(`^/sponds/${hex}/responses/${hex}$`, 'i')],
+  ['PUT', new RegExp(`^/posts/${hex}/poll/vote/${key}/${hex}$`, 'i')],
+  ['PUT', new RegExp(`^/sponds/${hex}/tasks/${key}/assignments/${hex}$`, 'i')],
+  ['POST', new RegExp(`^/sponds/${hex}/tasks/${key}/assignments$`, 'i')],
+  ['POST', new RegExp(`^/(sponds|posts)/${hex}/comments(/${key})?$`, 'i')],
+];
+const chatWrites = [['POST', /^\/messages$/]];
 
 export class Spond {
   #sessionProvider;
@@ -300,6 +349,8 @@ export class Spond {
     const family = new Map();
     // The user and the other guardians of the user's children, so chat messages from the family can be marked.
     const familyProfiles = new Set([profile.id]);
+    // The IDs Spond can use for the user themselves: their own memberships and their guardian entries.
+    const selfIds = new Set([profile.id]);
     for (const group of groups) {
       if (typeof group?.id !== 'string') continue;
       groupNames.set(group.id, str(group.name));
@@ -308,8 +359,10 @@ export class Spond {
         if (typeof member?.profile?.id === 'string') people.set(member.profile.id, fullName(member));
         for (const guardian of list(member?.guardians)) {
           if (typeof guardian?.profile?.id === 'string') people.set(guardian.profile.id, fullName(guardian));
+          if (guardian?.profile?.id === profile.id && typeof guardian.id === 'string') selfIds.add(guardian.id);
         }
         if (member?.profile?.id === profile.id && typeof member.id === 'string') {
+          selfIds.add(member.id);
           family.set(member.id, { name: fullName(member), relation: 'self', groupId: group.id, subGroupIds: list(member.subGroups) });
         }
       }
@@ -324,7 +377,7 @@ export class Spond {
         }
       }
     }
-    return { groups, people, groupNames, family, familyProfiles, timeZone: validTimeZone(profile.timezone) };
+    return { groups, people, groupNames, family, familyProfiles, profileId: profile.id, selfIds, timeZone: validTimeZone(profile.timezone) };
   }
 
   #event(event, context, { full = false } = {}) {
@@ -370,6 +423,18 @@ export class Spond {
       if (list(event?.attachments).length > 0) result.attachmentCount = event.attachments.length;
       result.comments = comments(event?.comments, people, timeZone);
       result.commentCount = list(event?.comments).length;
+      if (event?.commentsDisabled === true) result.commentsDisabled = true;
+      // Who has a task is shown by name only for the family; others are counted.
+      const tasks = eventTasks(event).slice(0, maxItems).map((task) => {
+        const item = { id: task.id, name: task.name, type: task.type, taken: task.accepted.length };
+        if (task.description) item.description = task.description;
+        if (task.limit) Object.assign(item, { needed: task.limit, remaining: task.remaining });
+        if (task.adultsOnly) item.adultsOnly = true;
+        const mine = [...new Set([...task.accepted, ...task.declined, ...task.unanswered])].filter((id) => family.has(id) || context.selfIds.has(id));
+        item.family = mine.map((id) => ({ name: (family.has(id) ? family.get(id).name : people.get(context.profileId)) || 'Unknown', status: taskStatus(task, id) }));
+        return item;
+      });
+      if (tasks.length > 0) result.tasks = tasks;
     }
     return result;
   }
@@ -647,10 +712,166 @@ export class Spond {
     return { request, preview, outcome };
   }
 
-  // Sends a request planned above. Only PUT on the paths the planners build.
-  async send({ method, path, body }) {
-    if (method !== 'PUT' || !/^\/(sponds\/[0-9A-F]{32}\/responses|posts\/[0-9A-F]{32}\/poll\/vote\/[0-9A-Za-z_-]{1,64})\/[0-9A-F]{32}$/i.test(path)) {
+  // Takes on or gives up a volunteer task on an event, for a child or for the user themselves.
+  async planTaskResponse({ event_id, task_id, accepted, member } = {}) {
+    const eventId = spondId(event_id, 'event_id');
+    if (typeof task_id !== 'string' || !optionIdPattern.test(task_id)) throw new PublicError('Invalid task_id.');
+    if (typeof accepted !== 'boolean') throw new PublicError('accepted must be true or false.');
+    const context = await this.#context();
+    const event = await this.#request(`/sponds/${eventId}`);
+    if (!event || typeof event !== 'object' || Array.isArray(event)) throw new PublicError('Spond sent an unexpected response.');
+    const task = eventTasks(event).find((item) => item.id === task_id);
+    if (!task) throw new PublicError('No task with that task_id on this event.');
+    // The same rules as Spond's web client for someone who is not an organizer.
+    const now = Date.now();
+    if (event.cancelled === true) throw new PublicError('The event is cancelled.');
+    if (event.expired === true || !(Date.parse(event.startTimestamp) > now)) throw new PublicError('The event has started, so tasks can no longer change.');
+    if (Date.parse(event.rsvpDate) <= now) throw new PublicError('The answer deadline has passed, so tasks can no longer change. Message the organizer instead.');
+    const respondents = [...task.accepted, ...task.declined, ...task.unanswered];
+    // Children Spond lets this user answer for, and the user themselves: by the ID Spond lists them with on this task,
+    // or, for an open task they have not answered, by profile ID, which means "take it myself".
+    const candidates = new Map();
+    for (const id of list(event.behalfOfIds)) {
+      if (context.family.get(id)?.relation === 'child' && (task.type === 'open' || respondents.includes(id))) candidates.set(id, context.family.get(id));
+    }
+    const selfId = respondents.find((id) => context.selfIds.has(id));
+    const parent = selfId || (task.type === 'open' ? context.profileId : undefined);
+    if (parent) candidates.set(parent, { name: context.people.get(context.profileId) });
+    const id = familyMember([...candidates.keys()], candidates, member, 'task');
+    const name = candidates.get(id).name || 'Unknown';
+    const status = taskStatus(task, id);
+    if (accepted) {
+      if (status === 'taken') throw new PublicError(`${name} has already taken this task.`);
+      if (task.limit && task.remaining <= 0) throw new PublicError('The task is full.');
+      if (task.adultsOnly && id !== parent) throw new PublicError('Only adults can take this task.');
+    } else if (status !== 'taken' && !(task.type === 'assigned' && status === 'asked')) {
+      throw new PublicError(`${name} has not taken this task.`);
+    }
+    const preview = { member: name, group: short(context.groupNames.get(event.recipients?.group?.id)), event: short(event.heading),
+      start: localTime(event.startTimestamp, context.timeZone), task: short(task.name), answer: accepted ? 'take' : 'give up',
+      ...(task.description ? { taskDescription: str(task.description, 500) } : {}), taskType: task.type, previousStatus: status,
+      taken: task.limit ? `${task.accepted.length} of ${task.limit}` : `${task.accepted.length}, no limit` };
+    // shortcut: the user's own open-task answer uses the web client's POST, which takes it for the signed-in user; which
+    // ID Spond then lists them with is not verified live, so the check afterwards also accepts one more taker.
+    const takeSelf = accepted && id === context.profileId && !selfId;
+    const base = `/sponds/${eventId}/tasks/${task.id}/assignments`;
+    const request = takeSelf ? { method: 'POST', path: base, body: {} } : { method: 'PUT', path: `${base}/${id}`, body: { accepted } };
+    const outcome = async () => {
+      const after = eventTasks(await this.#request(`/sponds/${eventId}`)).find((item) => item.id === task.id);
+      const has = takeSelf ? Boolean(after?.accepted.some((item) => context.selfIds.has(item))) || after?.accepted.length > task.accepted.length
+        : Boolean(after?.accepted.includes(id));
+      return { verified: Boolean(after) && has === accepted, takenNow: after?.accepted.length };
+    };
+    return { request, preview, outcome };
+  }
+
+  // A comment on an event or a wall post, or a reply to one of its comments. Spond nests replies one level deep.
+  async planComment({ event_id, post_id, comment_id, text } = {}) {
+    if ((event_id === undefined) === (post_id === undefined)) throw new PublicError('Give either event_id or post_id.');
+    const kind = event_id !== undefined ? 'sponds' : 'posts';
+    const targetId = spondId(event_id ?? post_id, event_id !== undefined ? 'event_id' : 'post_id');
+    if (comment_id !== undefined && (typeof comment_id !== 'string' || !optionIdPattern.test(comment_id))) throw new PublicError('Invalid comment_id.');
+    const body = { text: sendText(text) };
+    const context = await this.#context();
+    const read = async () => {
+      const data = await this.#request(`/${kind}/${targetId}`, { includeComments: 'true' });
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new PublicError('Spond sent an unexpected response.');
+      return data;
+    };
+    const target = await read();
+    if (target.commentsDisabled === true) throw new PublicError('Comments are turned off here.');
+    const preview = {};
+    if (kind === 'sponds') {
+      if (target.cancelled === true) throw new PublicError('The event is cancelled.');
+      Object.assign(preview, { event: short(target.heading), group: short(context.groupNames.get(target.recipients?.group?.id)),
+        start: localTime(target.startTimestamp, context.timeZone) });
+      // Everyone invited can read event comments.
+      const invited = new Set(responseLists.flatMap(([key]) => ids(target.responses?.[key]))).size;
+      Object.assign(preview, { audience: `${invited} invited` }, audienceWarnings(invited));
+    } else {
+      Object.assign(preview, { post: short(target.title) || short(target.poll?.question) || 'Untitled post', group: short(context.groupNames.get(target.groupId)) });
+      // Everyone in the group, or in the post's subgroups, can read it; guardians too.
+      const group = context.groups.find((item) => item?.id === target.groupId);
+      const subGroups = ids(target.subGroupIds);
+      const members = list(group?.members).filter((item) => subGroups.length === 0 || list(item?.subGroups).some((sub) => subGroups.includes(sub)));
+      Object.assign(preview, { audience: group ? `${members.length} group members and their guardians` : 'unknown' }, audienceWarnings(members.length));
+    }
+    const topLevel = list(target.comments);
+    if (comment_id !== undefined) {
+      const parent = topLevel.find((item) => item?.id === comment_id);
+      if (!parent) {
+        throw new PublicError(topLevel.some((item) => list(item?.children).some((child) => child?.id === comment_id))
+          ? 'Reply to the first comment of that thread: Spond nests replies one level deep.' : 'No comment with that comment_id here.');
+      }
+      const excerpt = str(parent.text, maxExcerptChars + 1) || '';
+      preview.replyTo = `${short(context.people.get(parent.fromProfileId)) || 'Unknown'}: ${excerpt.length > maxExcerptChars ? `${clean(excerpt.slice(0, maxExcerptChars))}…` : excerpt}`;
+    }
+    preview.text = body.text;
+    const request = { method: 'POST', path: `/${kind}/${targetId}/comments${comment_id !== undefined ? `/${comment_id}` : ''}`, body };
+    // Only a comment that was not there when this was planned counts as the one sent.
+    const threadOf = (all) => (comment_id !== undefined ? list(all.find((item) => item?.id === comment_id)?.children) : all);
+    const before = new Set(ids(threadOf(topLevel)));
+    const outcome = async () => {
+      const thread = threadOf(list((await read()).comments));
+      return { verified: thread.some((item) => typeof item?.id === 'string' && !before.has(item.id)
+        && item.fromProfileId === context.profileId && item.text === body.text) };
+    };
+    return { request, preview, outcome };
+  }
+
+  // A text message in an existing chat the user is a participant of. No new chats, and no guardian-only chats.
+  async planChatMessage({ chat_id, text } = {}) {
+    const id = chatId(chat_id);
+    const body = { chatId: id, text: sendText(text), type: 'TEXT' };
+    const context = await this.#context();
+    const chat = await this.#chatRequest(`/chats/${id}`);
+    if (!chat || typeof chat !== 'object' || chat.id !== id) throw new PublicError('Spond sent an unexpected response.');
+    const type = str(chat.type, 40)?.toLowerCase();
+    if (type !== 'group' && type !== 'dm') throw new PublicError('Only group chats and direct messages can get a message here.');
+    const former = ids(chat.formerParticipants);
+    const participants = [...new Set(ids(chat.participants))].filter((item) => !former.includes(item));
+    if (!participants.includes(context.profileId)) throw new PublicError('You are not a participant in this chat, so nothing can be sent there.');
+    // Spond's web client shows a chat outside the user's groups as lost access, with no way to write.
+    if (!context.groupNames.has(chat.groupId)) throw new PublicError('You no longer have access to the group of this chat.');
+    const recipients = participants.filter((item) => item !== context.profileId);
+    if (recipients.length === 0) throw new PublicError('No one else is in this chat.');
+    const group = short(context.groupNames.get(chat.groupId));
+    const recipient = type === 'dm' ? short(context.people.get(recipients[0])) || 'Unknown' : undefined;
+    // As in Spond's web client: guardians of children in the chat can read it too.
+    const guardians = new Set(list(context.groups.find((item) => item?.id === chat.groupId)?.members)
+      .filter((member) => recipients.includes(member?.profile?.id))
+      .flatMap((member) => list(member.guardians).map((guardian) => guardian?.profile?.id))
+      .filter((item) => typeof item === 'string' && !participants.includes(item)));
+    const preview = { chat: short(chat.name) || recipient || group || 'Unnamed chat', group, groupChat: type === 'group',
+      recipients: recipients.length, ...(recipient ? { recipient } : {}), ...(guardians.size ? { alsoReadBy: `${guardians.size} guardians` } : {}),
+      ...audienceWarnings(recipients.length + guardians.size), text: body.text };
+    const request = { host: 'chat', method: 'POST', path: '/messages', body };
+    // Only a message numbered after the newest one when this was planned counts as the one sent.
+    const numbers = (messages) => list(messages).map((message) => message?.msgNum).filter(Number.isInteger);
+    // If that cannot be read, nothing counts: the result is then reported as not shown yet, never as verified.
+    const newestBefore = await this.#chatRequest(`/chats/${id}/messages`, { count: '1' })
+      .then((messages) => Math.max(-1, ...numbers(messages)), () => Infinity);
+    const outcome = async () => {
+      const newest = list(await this.#chatRequest(`/chats/${id}/messages`, { count: '5' }));
+      return { verified: newest.some((message) => Number.isInteger(message?.msgNum) && message.msgNum > newestBefore
+        && message.user === context.profileId && message.text === body.text) };
+    };
+    return { request, preview, outcome };
+  }
+
+  // Sends a request planned above: only the exact method and path shapes the planners build.
+  async send({ host, method, path, body }) {
+    const shapes = host === 'chat' ? chatWrites : apiWrites;
+    if (typeof path !== 'string' || !shapes.some(([allowed, pattern]) => allowed === method && pattern.test(path))) {
       throw new PublicError('Invalid Spond request.');
+    }
+    if (host === 'chat') {
+      // The chat is named in the body, not the path: only a text message to one existing chat.
+      const keys = Object.keys(body || {}).sort().join();
+      if (keys !== 'chatId,text,type' || !chatIdPattern.test(body.chatId) || body.type !== 'TEXT' || typeof body.text !== 'string') {
+        throw new PublicError('Invalid Spond request.');
+      }
+      return this.#chatRequest(path, undefined, { method, body, write: true });
     }
     return this.#request(path, undefined, { method, body, write: true });
   }

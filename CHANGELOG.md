@@ -2,6 +2,12 @@
 
 [Norsk](CHANGELOG.no.md)
 
+## 0.6.0 (2026-11-25)
+
+- `get_event` shows volunteer tasks (name, description, how many are needed and have taken it, and who in your family has it) and comment IDs; `list_posts` shows comment IDs too.
+- Sending, still off unless `SPOND_ALLOW_SEND=1`: `prepare_task_response` takes on or gives up a task for a family member or yourself, `prepare_comment` comments on an event or post or replies to a comment, and `prepare_chat_message` writes in an existing chat you take part in. The preview shows the exact text (at most 2,000 characters, invisible characters removed) and how many people get or can read it. Messages and comments need the client's confirmation dialog (MCP elicitation), unless `SPOND_ALLOW_SEND_NO_DIALOG=1`. Not yet tested against Spond.
+- `send_prepared` now refuses if anything in the preview changed since it was prepared, not only the warnings. The same request can't be prepared twice, and line breaks in names from Spond can't fake lines in the confirmation dialog.
+
 ## 0.5.0 (2026-11-25)
 
 - `list_polls` lists polls with options, vote counts and what your family members voted. Polls are not in `list_posts`.

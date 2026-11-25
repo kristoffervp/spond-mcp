@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 function startServer(env = {}) {
   const child = spawn(process.execPath, ['src/server.js'], { cwd: new URL('..', import.meta.url).pathname,
-    env: { ...process.env, SPOND_ALLOW_SEND: '', ...env } });
+    env: { ...process.env, SPOND_ALLOW_SEND: '', SPOND_ALLOW_SEND_NO_DIALOG: '', ...env } });
   const lines = createInterface({ input: child.stdout });
   const replies = [];
   const waiters = [];
@@ -47,10 +47,27 @@ test('answering and voting tools exist only with SPOND_ALLOW_SEND=1, and the wri
     write({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
     const [{ result }] = await waitFor(1);
     const byName = Object.fromEntries(result.tools.map((tool) => [tool.name, tool]));
-    for (const name of ['prepare_event_response', 'prepare_poll_vote', 'send_prepared', 'mark_chat_read', 'mark_posts_read']) assert.ok(byName[name], name);
-    assert.equal(byName.prepare_event_response.annotations.readOnlyHint, true);
+    for (const name of ['prepare_event_response', 'prepare_poll_vote', 'prepare_task_response', 'prepare_comment', 'prepare_chat_message',
+      'send_prepared', 'mark_chat_read', 'mark_posts_read']) assert.ok(byName[name], name);
+    for (const name of ['prepare_event_response', 'prepare_task_response', 'prepare_comment', 'prepare_chat_message']) assert.equal(byName[name].annotations.readOnlyHint, true);
+    assert.equal(byName.prepare_chat_message.inputSchema.properties.text.maxLength, 2000);
     assert.deepEqual(result.tools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name), ['send_prepared', 'mark_chat_read', 'mark_posts_read']);
     assert.deepEqual(byName.send_prepared.inputSchema.required, ['confirmation_code', 'summary']);
+  } finally { child.kill(); }
+});
+
+test('a client without elicitation is told at once that chat messages and comments need the dialog', async () => {
+  const { child, waitFor, write } = startServer({ SPOND_ALLOW_SEND: '1' });
+  try {
+    write({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {} } });
+    write({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'prepare_chat_message', arguments: { chat_id: 'chat-1', text: 'Hi' } } });
+    write({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'prepare_comment', arguments: { event_id: 'A'.repeat(32), text: 'Hi' } } });
+    const replies = await waitFor(3);
+    for (const id of [2, 3]) {
+      const reply = replies.find((item) => item.id === id);
+      assert.equal(reply.result.isError, true);
+      assert.match(reply.result.content[0].text, /SPOND_ALLOW_SEND_NO_DIALOG=1/);
+    }
   } finally { child.kill(); }
 });
 
@@ -97,6 +114,9 @@ globalThis.fetch = async (url, options = {}) => {
   try {
     write({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: { elicitation: {} } } });
     await next((m) => m.id === 1);
+    // With elicitation, a chat message gets past the dialog check to Spond (whose chat is not stubbed here).
+    write({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'prepare_chat_message', arguments: { chat_id: 'chat-1', text: 'Hi' } } });
+    assert.doesNotMatch((await next((m) => m.id === 9)).result.content[0].text, /SPOND_ALLOW_SEND_NO_DIALOG/);
     write({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'mark_chat_read', arguments: { chat_id: 'chat-1' } } });
     const ask = await next((m) => m.method === 'elicitation/create');
     assert.match(ask.params.message, /^Spond: mark_chat_read\nchatId: chat-1\nupToMessage: 3/);

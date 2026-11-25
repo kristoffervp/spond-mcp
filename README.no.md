@@ -10,7 +10,7 @@
 
 <p align="center">Norsk · <a href="README.md">English</a></p>
 
-En lokal MCP-server som lar en KI-klient lese arrangementene, innleggene på gruppeveggen, avstemningene og chattene dine i Spond. Som standard leser den bare. Med sending slått på kan den også svare på arrangementer, stemme i avstemninger og merke chatter og innlegg som lest. Den kan ikke sende meldinger.
+En lokal MCP-server som lar en KI-klient lese arrangementene, innleggene på gruppeveggen, avstemningene og chattene dine i Spond. Som standard leser den bare. Med sending slått på kan den også svare på arrangementer, stemme i avstemninger, ta på seg dugnadsoppgaver, kommentere arrangementer og innlegg, skrive i chatter du er med i, og merke chatter og innlegg som lest.
 
 **Uoffisiell.** Ikke laget av eller knyttet til Spond AS. Den bruker udokumenterte endepunkter som kan endres uten varsel.
 
@@ -44,7 +44,7 @@ npm run login
 | `list_family` | Deg og barna du svarer for, med gruppene og undergruppene deres |
 | `list_groups` | Grupper med undergrupper, aktivitet, klubb, kontaktperson, antall medlemmer og hvilke familiemedlemmer som er med. Ingen medlemslister |
 | `list_events` | Arrangementer med tidspunkt, oppmøte, sted og familiens svar. `from_date` og `to_date` (`YYYY-MM-DD`) er som standard i dag og de neste 14 dagene, høyst 366 dager. Filtre: `group_id`, `only_unanswered` |
-| `get_event` | Ett arrangement med beskrivelse, arrangører, kommentarer og familiens svar |
+| `get_event` | Ett arrangement med beskrivelse, arrangører, kommentarer, dugnadsoppgaver og familiens svar |
 | `list_posts` | Nye innlegg på gruppeveggen med kommentarer, inntil `limit` (1 til 50, standard 20). Filter: `group_id`. `include_images` gir også bildelenker |
 | `list_chats` | Nye chatter, også gruppechatter du følger som foresatt, med tidspunkt, nummer (`newestNum`) og et utdrag av den nyeste meldingen. Inntil `limit` (1 til 50, standard 20) |
 | `get_chat` | De nyeste meldingene i én chat, eldste først, inntil `limit` (1 til 50, standard 20). `max_num` leser lenger bakover. `include_images` gir også bildelenker |
@@ -62,17 +62,21 @@ Sett `SPOND_ALLOW_SEND=1` (i `"env"` i klientoppsettet) for å få disse verktø
 | --- | --- |
 | `prepare_event_response` | Forbereder ja eller nei til et arrangement for et familiemedlem (`member`, fornavn eller fullt navn, hvis flere er invitert), med en valgfri `reason` på høyst 100 tegn ved nei |
 | `prepare_poll_vote` | Forbereder en stemme i en avstemning for et familiemedlem, eller fjerner en med `vote: false` |
+| `prepare_task_response` | Forbereder å ta på seg eller gi fra seg en dugnadsoppgave på et arrangement (kakebaking, kjøring) for et familiemedlem eller deg selv |
+| `prepare_comment` | Forbereder en kommentar på et arrangement eller innlegg, eller et svar på en av kommentarene |
+| `prepare_chat_message` | Forbereder en tekstmelding i en chat du er med i |
 | `send_prepared` | Sender det et forberedelsesverktøy har forberedt |
 | `mark_chat_read` | Merker en chat som lest til og med den nyeste meldingen |
 | `mark_posts_read` | Merker inntil 20 innlegg som lest |
 
-- Svar og stemmer tar to steg. Et forberedelsesverktøy sjekker forespørselen og gir nøyaktig det som vil bli sendt, et sammendrag på én linje (`summary`) og en engangskode; ingenting er sendt da. `send_prepared` trenger koden og det samme sammendraget, så klientens godkjenning viser hva som sendes. Koden virker én gang, går ut etter 10 minutter og hører til serveren som kjører: en omstartet server har glemt den. Rett før sending sjekker serveren arrangementet eller avstemningen på nytt og nekter hvis noe er endret. Etterpå melder den det nye svaret eller stemmen. Alt som sendes eller forsøkes sendt, logges i `.data/sent.jsonl`.
-- Hvis klienten støtter det (MCP-elicitation), bekrefter du hver sending og hver merking som lest i klientens egen dialog. Ellers er klientens godkjenning av verktøykall den eneste sjekken: velg aldri «Tillat alltid» for `send_prepared`, `mark_chat_read` eller `mark_posts_read`.
-- Hvis Spond ikke svarer etter en sending, sier serveren at den kan ha blitt sendt. Sjekk med `list_events` eller `list_polls` før du forbereder den på nytt.
-- Samme regler som Sponds nettklient: ingen svar på avlyste eller ferdige arrangementer, arrangementer med betaling, eller etter at oppmøtet er registrert; ikke ja etter svarfristen, med mindre en plass er tilbudt fra ventelisten; ingen endring av svar etter fristen. Et forberedelsesverktøy varsler når et ja setter barnet på venteliste, eller et nei gir fra seg en plass.
+- Alt unntatt merk som lest tar to steg. Et forberedelsesverktøy sjekker forespørselen og gir nøyaktig det som vil bli sendt, et sammendrag på én linje (`summary`) og en engangskode; ingenting er sendt da. `send_prepared` trenger koden og det samme sammendraget, så klientens godkjenning viser hva som sendes. Koden virker én gang, går ut etter 10 minutter og hører til serveren som kjører: en omstartet server har glemt den. Rett før sending sjekker serveren målet på nytt og nekter hvis noe i forhåndsvisningen er endret. Etterpå melder den om Spond viser resultatet. Alt som sendes eller forsøkes sendt, logges i `.data/sent.jsonl`.
+- Hvis klienten støtter det (MCP-elicitation), bekrefter du hver sending og hver merking som lest i klientens egen dialog. Chatmeldinger og kommentarer sendes bare med den dialogen, fordi de når mange med tekst KI-en har skrevet; `SPOND_ALLOW_SEND_NO_DIALOG=1` tillater dem uten. For resten er klientens godkjenning av verktøykall den eneste sjekken i en klient uten dialogen: velg aldri «Tillat alltid» for `send_prepared`, `mark_chat_read` eller `mark_posts_read`.
+- Hvis Spond ikke svarer etter en sending, sier serveren at den kan ha blitt sendt. Sjekk i Spond før du forbereder den på nytt.
+- Samme regler som Sponds nettklient: ingen svar på avlyste eller ferdige arrangementer, arrangementer med betaling, eller etter at oppmøtet er registrert; ikke ja etter svarfristen, med mindre en plass er tilbudt fra ventelisten; ingen endring av svar etter fristen. Et forberedelsesverktøy varsler når et ja setter barnet på venteliste, eller et nei gir fra seg en plass. Oppgaver følger de samme reglene: ingen endringer når arrangementet har startet eller etter svarfristen, og ingen kan ta en full oppgave.
+- Meldinger og kommentarer er på høyst 2000 tegn, og usynlige tegn fjernes. Forhåndsvisningen, og starten av `summary`, viser hvor mange som får eller kan lese den og hele teksten, med et varsel over 30 personer: deltakerne i chatten (og foresatte til barn i den), alle invitert til et arrangement, eller gruppen til innlegget. Meldinger går bare til chatter som finnes og som du er deltaker i, ikke til chatter du bare følger som foresatt.
 - Merk som lest trenger ingen kode, men bekreftes som en sending. Det kan ikke angres.
 - Endepunktene er hentet fra Sponds nettklient og er ikke testet mot en ekte konto ennå. Sjekk resultatet i Spond-appen de første gangene.
-- Et innlegg eller en chat kan inneholde tekst som skal få KI-klienten til å svare for deg. Les forhåndsvisningen, og la sending være av når du ikke trenger den.
+- Et innlegg eller en chat kan inneholde tekst som skal få KI-klienten til å svare eller skrive for deg, for eksempel til en stor gruppe. Les forhåndsvisningen, og la sending være av når du ikke trenger den.
 
 ## Slik virker det
 
@@ -114,7 +118,8 @@ Settes i klientoppsettet (og i Terminal for `npm run login`):
 | Variabel | Standard | Brukes til |
 | --- | --- | --- |
 | `SPOND_DATA_DIR` | `.data` i denne mappen | Hvor innloggingen og loggen over det som er sendt, lagres |
-| `SPOND_ALLOW_SEND` | av | `1` gir verktøyene som svarer på arrangementer, stemmer og merker som lest (se Sending) |
+| `SPOND_ALLOW_SEND` | av | `1` gir verktøyene som svarer, stemmer, tar oppgaver, kommenterer, skriver i chatter og merker som lest (se Sending) |
+| `SPOND_ALLOW_SEND_NO_DIALOG` | av | `1` sender chatmeldinger og kommentarer også fra klienter som ikke kan vise bekreftelsesdialogen |
 
 ## Feilsøking
 
@@ -131,7 +136,7 @@ Settes i klientoppsettet (og i Terminal for `npm run login`):
 
 - Serveren kjører på din datamaskin og åpner ingen nettverksport. En KI-klient du kobler til, kan likevel lese arrangementene, innleggene og chattene dine i Spond, og en KI-tjeneste i skyen får det klienten leser. Vurder selv hva du vil dele.
 - Tekst fra Spond sendes videre som informasjon, ikke instruksjoner. Det kan ikke stoppe alle forsøk på å styre KI-en. Bruk klienter du stoler på, og se over verktøykallene.
-- Gruppedataene i Spond inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, og gir aldri telefonnumre, e-postadresser, fødselsdatoer eller medlemslister. Svar vises per person bare for din egen familie. Chatter viser antall deltakere, ikke hvem de er.
+- Gruppedataene i Spond inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, og gir aldri telefonnumre, e-postadresser, fødselsdatoer eller medlemslister. Svar vises per person bare for din egen familie. Chatter viser antall deltakere, ikke hvem de er; bare forhåndsvisningen av en direktemelding navngir den andre. Oppgaver navngir bare familien din; andre telles.
 - Bildelenker kommer bare med `include_images: true`, fordi alle som har lenken, kan åpne bildet uten å logge inn.
 - Passordet vises ikke mens du skriver, og lagres aldri. `.data/session.json` inneholder tokener som gir tilgang til Spond-kontoen din. Del den aldri, og slett den for å fjerne innloggingen.
 - Forespørsler går bare til `api.spond.com` og til en chat-vert på `spond.com` over HTTPS, og omdirigeringer følges ikke. Feilmeldinger klienten får, inneholder aldri tokener eller personopplysninger. Usynlige tegn som kan skjule instruksjoner for deg, men ikke for KI-en, fjernes fra all tekst.
