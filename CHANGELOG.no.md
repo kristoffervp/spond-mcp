@@ -2,6 +2,10 @@
 
 [English](CHANGELOG.md)
 
+## 0.6.1 (2026-11-25)
+
+- Kommentarer og svar i `get_event` og `list_posts` fra deg eller en annen foresatt til barna dine får `fromFamily`, som chatmeldinger.
+
 ## 0.6.0 (2026-11-25)
 
 - `get_event` viser dugnadsoppgaver (navn, beskrivelse, hvor mange som trengs og har tatt den, og hvem i familien din som har den) og ID-er for kommentarer; `list_posts` viser også ID-er for kommentarer.
