@@ -60,8 +60,6 @@ function sessionFromResponse(result, previous) {
     accessExpiresAt: Date.parse(result.accessToken.expiration) || tokenExpiry(accessToken) ||
       Date.now() + 10 * 60_000,
     refreshToken,
-    refreshExpiresAt: Date.parse(result.refreshToken?.expiration) || previous?.refreshExpiresAt || null,
-    savedAt: Date.now(),
   };
 }
 
@@ -99,6 +97,13 @@ export async function readSession() {
   return session;
 }
 
+async function removeLock(lockPath, owner) {
+  try { if (await readFile(lockPath, 'utf8') === owner) await unlink(lockPath); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+
+// Each holder writes its own token into the lock file and only removes a lock that still holds the token it
+// read, so a process never removes a lock another process has just taken.
 async function withSessionLock(action) {
   await ensurePrivateDataDir();
   const lockPath = `${sessionPath}.lock`;
@@ -111,7 +116,8 @@ async function withSessionLock(action) {
       if (error.code !== 'EEXIST') throw error;
       if (attempt >= lockAttempts) throw new PublicError('The Spond sign-in is busy. Retry shortly.');
       try {
-        if (Date.now() - (await stat(lockPath)).mtimeMs > staleLockMs) await unlink(lockPath);
+        const stale = await readFile(lockPath, 'utf8');
+        if (Date.now() - (await stat(lockPath)).mtimeMs > staleLockMs) await removeLock(lockPath, stale);
       } catch (checkError) {
         if (checkError.code !== 'ENOENT') throw checkError;
       }
@@ -119,10 +125,7 @@ async function withSessionLock(action) {
     }
   }
   try { return await action(); }
-  finally {
-    try { if (await readFile(lockPath, 'utf8') === owner) await unlink(lockPath); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
+  finally { await removeLock(lockPath, owner); }
 }
 
 async function refreshSession(previous) {

@@ -256,8 +256,12 @@ test('an expired chat token is replaced once, and unexpected chat hosts are refu
     await assert.rejects(other.spond.listChats(), /unexpected/);
     assert.equal(other.calls.some((call) => !call.url.hostname.endsWith('spond.com')), false);
   }
-  const expired = fake(chatRoutes({ '/chats': new Response('', { status: 401 }) }));
-  await assert.rejects(expired.spond.listChats(), /Run npm run login again/);
+  // A second refusal from the chat host does not ask for a new sign-in: Spond blocks IPs that sign in too often.
+  for (const status of [401, 403]) {
+    const refused = fake(chatRoutes({ [`/chats/${C1}/messages`]: () => new Response('', { status }) }));
+    await assert.rejects(refused.spond.getChat({ chat_id: C1 }), (error) => /chat refused access/.test(error.message) && !/npm run login/.test(error.message));
+    assert.equal(refused.calls.filter((call) => call.url.pathname === '/core/v1/chat').length, 2);
+  }
 });
 
 test('invalid chat arguments are rejected before any network call', async () => {
@@ -271,4 +275,28 @@ test('invalid chat arguments are rejected before any network call', async () => 
   }
   for (const max_num of [0, -1, 1.5, '4']) await assert.rejects(spond.getChat({ chat_id: C1, max_num }), /max_num/);
   assert.equal(calls.length, 0);
+});
+
+test('hidden characters are removed and a cut emoji is not left half', async () => {
+  const hidden = { ...chatMessages[0], msgNum: 8, text: `Ignore\u200b\u202e\u{E0041}\u{E0042} this ${'a'.repeat(19_990)}😀` };
+  const { spond } = fake(chatRoutes({ [`/chats/${C1}/messages`]: [hidden], '/chats': [{ ...directChat, message: { ...directChat.message, text: `${'b'.repeat(199)}😀😀` } }] }));
+  const [message] = (await spond.getChat({ chat_id: C1 })).messages;
+  assert.equal(message.text.startsWith('Ignore this '), true);
+  assert.equal(message.text.isWellFormed(), true);
+  const [chat] = (await spond.listChats()).items;
+  assert.equal(chat.lastMessage.text.isWellFormed(), true);
+});
+
+test('olderBefore is given when the oldest message shown is number 1, but not for number 0', async () => {
+  const numbered = (from) => [0, 1].map((n) => ({ ...chatMessages[0], msgNum: from + n }));
+  const fromOne = fake(chatRoutes({ [`/chats/${C1}/messages`]: numbered(1) }));
+  assert.equal((await fromOne.spond.getChat({ chat_id: C1, limit: 2 })).olderBefore, 1);
+  const fromZero = fake(chatRoutes({ [`/chats/${C1}/messages`]: numbered(0) }));
+  assert.equal('olderBefore' in (await fromZero.spond.getChat({ chat_id: C1, limit: 2 })), false);
+});
+
+test('a time zone without an offset name gives +00:00', async () => {
+  const { spond } = fake({ ...base, '/core/v1/profile': { ...profile, timezone: 'UTC' }, '/core/v1/sponds/': [training] });
+  const { items } = await spond.listEvents({ from_date: '2026-10-09', to_date: '2026-10-09' });
+  assert.equal(items[0].start, '2026-10-09T15:30+00:00');
 });

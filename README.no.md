@@ -21,7 +21,6 @@ Du trenger Node.js 20 eller nyere.
 ```sh
 git clone https://github.com/kristoffervp/spond-mcp.git
 cd spond-mcp
-npm install
 npm run login
 ```
 
@@ -92,6 +91,7 @@ Settes i klientoppsettet (og i Terminal for `npm run login`):
 
 - **«No Spond sign-in found» eller «The Spond sign-in has expired».** Kjør `npm run login` på nytt. Fornyelsestokenet varer i 90 dager og starter på nytt ved hver fornying, så dette skjer etter 90 dager uten bruk eller når Spond avslutter økten.
 - **«This Spond account requires two-factor verification».** Kontoer med totrinnsbekreftelse støttes ikke ennå.
+- **«Spond chat refused access».** Chat-verten avviste et nytt chat-token. Prøv igjen senere; selve innloggingen virker, så ikke logg inn på nytt.
 - **«Spond is limiting requests».** Vent noen minutter. Spond har blokkert IP-adresser som logger inn for ofte, så ikke kjør `npm run login` gang på gang.
 - **Innloggingen slutter å virke etter at `.data/` er kopiert til en annen datamaskin.** Hver fornying bytter ut fornyelsestokenet, så to kopier kan ikke begge forbli innlogget. Kjør `npm run login` på hver datamaskin.
 - **«The Spond response is too large».** Snevre inn forespørselen med `group_id`, en kortere periode eller en lavere `limit`.
@@ -105,7 +105,7 @@ Settes i klientoppsettet (og i Terminal for `npm run login`):
 - Gruppedataene i Spond inneholder andres barn og deres foresatte. Serveren viser andre personer bare med navn, og gir aldri telefonnumre, e-postadresser, fødselsdatoer eller medlemslister. Svar vises per person bare for din egen familie. Chatter viser antall deltakere, ikke hvem de er.
 - Bildelenker kommer bare med `include_images: true`, fordi alle som har lenken, kan åpne bildet uten å logge inn.
 - Passordet vises ikke mens du skriver, og lagres aldri. `.data/session.json` inneholder tokener som gir tilgang til Spond-kontoen din. Del den aldri, og slett den for å fjerne innloggingen.
-- Forespørsler går bare til `api.spond.com` og til en chat-vert på `spond.com` over HTTPS, og omdirigeringer følges ikke. Feilmeldinger klienten får, inneholder aldri tokener eller personopplysninger.
+- Forespørsler går bare til `api.spond.com` og til en chat-vert på `spond.com` over HTTPS, og omdirigeringer følges ikke. Feilmeldinger klienten får, inneholder aldri tokener eller personopplysninger. Usynlige tegn som kan skjule instruksjoner for deg, men ikke for KI-en, fjernes fra all tekst.
 - Se [SECURITY.md](SECURITY.md) for å melde fra om sikkerhetshull.
 
 ## Endringslogg

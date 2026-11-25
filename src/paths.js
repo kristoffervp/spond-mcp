@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,10 +13,17 @@ export async function ensurePrivateDataDir() {
   await chmod(dataDir, 0o700);
 }
 
+// A new file under a random name is renamed into place, so a symlink at the path is replaced instead of written
+// through, and a failed write leaves no copy of the tokens behind.
 export async function savePrivateJson(path, value) {
   await ensurePrivateDataDir();
   const temp = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temp, JSON.stringify(value), { mode: 0o600 });
-  await chmod(temp, 0o600);
-  await rename(temp, path);
+  try {
+    await writeFile(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+    await chmod(temp, 0o600);
+    await rename(temp, path);
+  } catch (error) {
+    await unlink(temp).catch(() => {});
+    throw error;
+  }
 }
