@@ -103,8 +103,14 @@ globalThis.fetch = async (url, options = {}) => {
     assert.equal(stderr.includes('MARKED'), false, 'nothing happens before the parent answers');
     write({ jsonrpc: '2.0', id: ask.id, result: { action: 'decline' } });
     assert.match((await next((m) => m.id === 2)).result.content[0].text, /not confirmed/);
+    write({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'mark_chat_read', arguments: { chat_id: 'chat-1' } } });
+    const cancelled = await next((m) => m.method === 'elicitation/create' && m.id !== ask.id);
+    write({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 4 } });
+    assert.match((await next((m) => m.id === 4)).result.content[0].text, /not confirmed/);
+    write({ jsonrpc: '2.0', id: cancelled.id, result: { action: 'accept', content: { confirm: true } } });
     write({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'mark_chat_read', arguments: { chat_id: 'chat-1' } } });
-    const again = await next((m) => m.method === 'elicitation/create' && m.id !== ask.id);
+    const again = await next((m) => m.method === 'elicitation/create' && m.id !== ask.id && m.id !== cancelled.id);
+    assert.equal(stderr.includes('MARKED'), false, 'an answer after the client cancelled does nothing');
     write({ jsonrpc: '2.0', id: again.id, result: { action: 'accept', content: { confirm: true } } });
     assert.equal((await next((m) => m.id === 3)).result.structuredContent.data.readUpTo, 3);
     assert.equal(stderr.includes('MARKED'), true);
