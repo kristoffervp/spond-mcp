@@ -10,7 +10,7 @@
 
 <p align="center">English · <a href="README.no.md">Norsk</a></p>
 
-A local, read-only MCP server that lets an AI client read your Spond events, group wall posts and chats. It can't answer invitations, send messages or change anything in Spond.
+A local MCP server that lets an AI client read your Spond events, group wall posts, polls and chats. By default it only reads. With sending turned on, it can also answer events, vote in polls and mark chats and posts as read. It can't send messages.
 
 **Unofficial.** Not made by or affiliated with Spond AS. It uses undocumented endpoints that can change without notice.
 
@@ -48,10 +48,31 @@ npm run login
 | `list_posts` | Recent group wall posts with comments, up to `limit` (1 to 50, default 20). Filter: `group_id`. `include_images` adds image links |
 | `list_chats` | Recent chats, also group chats you follow as a guardian, with the time, number (`newestNum`) and an excerpt of the newest message. Up to `limit` (1 to 50, default 20) |
 | `get_chat` | The newest messages in one chat, oldest first, up to `limit` (1 to 50, default 20). `max_num` reads further back. `include_images` adds image links |
+| `list_polls` | Recent polls with options, vote counts, the deadline and what your family members voted. Others are counted, not named. Filter: `group_id` |
 
 Each event shows every family member's response (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed` or `unknown`) and counts the responses of everyone invited. Times are local, with the offset of your Spond profile's time zone, for example `2026-10-10T12:15+02:00`. Lists return at most 50 entries, and long text is shortened and marked. Results are returned as `structuredContent` and as JSON text, both marked as untrusted content from Spond.
 
 `asGuardian` marks chats you follow on behalf of a child, which is where parents' group chats usually are. When a chat has older messages, `get_chat` returns `olderBefore`, a number to pass as `max_num`. `fromFamily` marks messages from you or another guardian of your children. Deleted messages have no text.
+
+## Sending (opt-in, not yet tested against Spond)
+
+Set `SPOND_ALLOW_SEND=1` (in `"env"` in the client config) to add these tools:
+
+| Tool | What it does |
+| --- | --- |
+| `prepare_event_response` | Prepares yes or no to an event for a family member (`member`, a first or full name, if several are invited), with an optional `reason` of at most 100 characters when declining |
+| `prepare_poll_vote` | Prepares a vote in a poll for a family member, or with `vote: false` removes one |
+| `send_prepared` | Sends what a prepare tool prepared |
+| `mark_chat_read` | Marks a chat as read up to its newest message |
+| `mark_posts_read` | Marks up to 20 posts as read |
+
+- Answers and votes take two steps. A prepare tool checks the request and returns exactly what would be sent, a one-line `summary` and a one-time code; nothing has been sent at that point. `send_prepared` needs the code and the same `summary`, so the client's approval prompt shows what is sent. The code works once, expires after 10 minutes and belongs to the running server: a restarted server has forgotten it. Just before sending, the server checks the event or poll again and refuses if anything changed. Afterwards it reports the new answer or vote. Everything sent or attempted is logged in `.data/sent.jsonl`.
+- If the client supports it (MCP elicitation), you confirm each send and each mark read in the client's own dialog. Otherwise the client's tool approval is the only check: never choose "Always allow" for `send_prepared`, `mark_chat_read` or `mark_posts_read`.
+- If Spond does not answer after a send, the server says it may have been sent. Check with `list_events` or `list_polls` before preparing it again.
+- The same rules as Spond's web client: no answers to cancelled or finished events, events with a payment, or after attendance is registered; no yes after the answer deadline unless a spot is offered from the waiting list; no change of an answer after the deadline. A prepare tool warns when a yes puts the child on the waiting list, or a no gives up a spot.
+- Mark read needs no code, but is confirmed like a send. It can't be undone.
+- The endpoints come from Spond's web client and have not been tested against a real account yet. Check the result in the Spond app the first times.
+- A post or chat can contain text meant to make the AI client answer for you. Read the preview, and leave sending off when you don't need it.
 
 ## How it works
 
@@ -59,24 +80,31 @@ The server runs on your computer and talks to the AI client over stdio. It uses 
 
 ```mermaid
 flowchart LR
-  client["AI client<br/>Claude Desktop, ChatGPT …"]
+  you(["You"])
+  client["AI client"]
   subgraph computer["Your computer"]
     server["MCP server<br/>src/server.js, mcp-format.js"]
-    spond["Spond client<br/>spond.js"]
+    spond["Spond client and read tools<br/>spond.js"]
+    send["Sending tools<br/>sending.js<br/>(only with SPOND_ALLOW_SEND=1)"]
     auth["Sign-in and renewal<br/>auth.js"]
     login["npm run login<br/>login.js"]
-    data[(".data/<br/>session.json<br/>(sign-in tokens)")]
+    data[(".data/<br/>session.json (sign-in),<br/>sent.jsonl")]
   end
   api["Spond API<br/>api.spond.com"]
   chat["Spond chat<br/>separate host on spond.com"]
+  you <-->|"asks, sees the preview"| client
   client <-->|"MCP over stdio"| server
   server --> spond
+  server -->|"prepare → summary and code,<br/>then send_prepared"| send
+  send -.->|"asks you to confirm<br/>(MCP elicitation)"| client
+  send -->|"checks again, then sends once"| spond
   spond -->|"asks for a valid token"| auth
   spond <-->|"HTTPS with the access token"| api
   spond <-->|"HTTPS with a chat token,<br/>kept in memory"| chat
   login -->|"email or phone<br/>and password"| auth
   auth <-->|"sign in and renew"| api
   auth -.->|"saves and reads the tokens"| data
+  send -.->|"logs what is sent"| data
 ```
 
 ## Configuration
@@ -85,7 +113,8 @@ Set this in the client config (and in Terminal for `npm run login`):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SPOND_DATA_DIR` | `.data` in this folder | Where the sign-in is saved |
+| `SPOND_DATA_DIR` | `.data` in this folder | Where the sign-in and the log of sent items are saved |
+| `SPOND_ALLOW_SEND` | off | `1` adds the tools that answer events, vote and mark as read (see Sending) |
 
 ## Troubleshooting
 
