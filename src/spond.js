@@ -24,8 +24,13 @@ function list(value) {
 
 // Format and control characters (direction overrides, zero-width and Unicode tag characters) can hide text
 // from the parent while an AI client still reads it. toWellFormed repairs an emoji cut in half by slice.
-const invisibleCharacters = /(?![\n\t])[\p{Cf}\p{Cc}]/gu;
-const clean = (text) => text.toWellFormed().replace(invisibleCharacters, '');
+// Hangul fillers, the braille blank and variation selectors render as nothing too; runs of variation selectors collapse.
+const invisibleCharacters = /(?![\n\t])[\p{Cf}\p{Cc}\u034F\u115F\u1160\u3164\uFFA0\u2800\u{E0100}-\u{E01EF}]/gu;
+export const clean = (text) => String(text ?? '').toWellFormed().replace(/[\u2028\u2029]/g, '\n').replace(invisibleCharacters, '')
+  .replace(/([\uFE00-\uFE0F])[\uFE00-\uFE0F]+/g, '$1');
+
+// Once a write has left, a lost answer does not mean it was not applied, so it is never reported as safe to retry.
+const uncertain = 'It may have been sent. Check list_events or list_polls before preparing again.';
 
 function str(value, max = 1_024) {
   return typeof value === 'string' && value ? clean(value.slice(0, max)) || undefined : undefined;
@@ -121,8 +126,60 @@ async function limitedJson(response) {
     if (size > maxJsonBytes) throw new PublicError('The Spond response is too large. Narrow the request.');
     chunks.push(chunk);
   }
+  if (size === 0) return null;  // write calls may answer with an empty body
   try { return JSON.parse(Buffer.concat(chunks, size).toString('utf8')); }
   catch { throw new PublicError('Spond sent an unexpected response.'); }
+}
+
+const optionIdPattern = /^[0-9A-Za-z_-]{1,64}$/;
+const maxReason = 100;  // the web client's limit for a decline message
+
+// A member's answer as Spond's web client reads it: unconfirmed (offered a spot from the waiting list) wins.
+function responseOf(responses, id) {
+  const has = (key) => list(responses?.[key]).includes(id);
+  if (has('unconfirmedIds')) return 'unconfirmed';
+  if (has('waitinglistIds')) return 'waiting_list';
+  if (has('acceptedIds')) return 'accepted';
+  if (has('declinedIds')) return 'declined';
+  return has('unansweredIds') ? 'unanswered' : 'unknown';
+}
+
+// Picks who to answer for among the IDs Spond lets this user answer for, by first or full name.
+function familyMember(ids, family, member, what) {
+  const candidates = [...new Set(list(ids).filter((id) => typeof id === 'string' && /^[0-9A-Fa-f]{32}$/.test(id) && family.has(id)))];
+  const names = candidates.map((id) => family.get(id).name || 'Unknown').join(', ');
+  if (candidates.length === 0) throw new PublicError(`No one in your family can answer this ${what}.`);
+  if (member === undefined) {
+    if (candidates.length > 1) throw new PublicError(`Name the family member to answer for: ${names}.`);
+    return candidates[0];
+  }
+  const query = typeof member === 'string' ? clean(member).trim().toLowerCase() : '';
+  if (!query) throw new PublicError('member must be a name.');
+  const found = candidates.filter((id) => {
+    const name = (family.get(id).name || '').toLowerCase();
+    return name === query || name.split(' ')[0] === query;
+  });
+  if (found.length !== 1) throw new PublicError(`No single family member with that name on this ${what}. Choose from: ${names}.`);
+  return found[0];
+}
+
+function pollSummary(poll, family, timeZone) {
+  const time = poll.type === 'TIME';
+  const options = list(poll.options).filter((option) => typeof option?.id === 'string' && optionIdPattern.test(option.id)).slice(0, maxItems);
+  const text = (option) => (time ? localTime(option.text, timeZone) : undefined) || str(option.text) || '';
+  const result = { question: str(poll.question), type: time ? 'time' : 'text', multipleChoice: poll.multipleChoice === true,
+    ends: localTime(poll.dueBy, timeZone), ended: Date.parse(poll.dueBy) <= Date.now() || poll.expired === true,
+    options: options.map((option) => ({ id: option.id, text: text(option), votes: list(option.votes).length })),
+    blankVotes: list(poll.blankVotes).length };
+  const description = str(poll.description);
+  if (description) result.description = description;
+  // Who voted for what only for the family; other members are counted, never named.
+  result.family = list(poll.behalfOfIds).filter((id) => family.has(id)).map((id) => ({
+    name: family.get(id).name || 'Unknown',
+    votedFor: options.filter((option) => list(option.votes).includes(id)).map(text),
+    ...(list(poll.blankVotes).includes(id) ? { blank: true } : {}),
+  }));
+  return result;
 }
 
 function comments(value, people, timeZone, nested = false) {
@@ -147,7 +204,7 @@ export class Spond {
     this.#fetcher = fetcher;
   }
 
-  async #request(path, query, { method = 'GET' } = {}) {
+  async #request(path, query, { method = 'GET', body, write = false } = {}) {
     let session = await this.#sessionProvider();
     const url = new URL(`${apiBase}${path}`);
     if (url.origin !== apiOrigin || !url.pathname.startsWith('/core/v1/')) throw new PublicError('Invalid Spond address.');
@@ -156,25 +213,25 @@ export class Spond {
       try {
         return await this.#fetcher(url, {
           method, headers: { Authorization: `Bearer ${session.accessToken}`, Accept: 'application/json',
-            ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
-          ...(method === 'POST' ? { body: '{}' } : {}),
+            ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           redirect: 'manual', signal: AbortSignal.timeout(30_000),
         });
-      } catch { throw new PublicError('Could not reach Spond. Check the network and retry.'); }
+      } catch { throw new PublicError(write ? uncertain : 'Could not reach Spond. Check the network and retry.'); }
     };
     let response = await send();
     if (response.status === 401) {
       session = await this.#refresh(session);
       response = await send();
     }
-    return this.#checked(response);
+    return this.#checked(response, write);
   }
 
   // Chat lives on a separate host. POST /chat gives its address and a chat token, kept in memory only.
   #chatSession(renew = false) {
     if (!this.#chat || renew) {
       const pending = (async () => {
-        const data = await this.#request('/chat', undefined, { method: 'POST' });
+        const data = await this.#request('/chat', undefined, { method: 'POST', body: {} });
         let base;
         try { base = new URL(data?.url); } catch { throw new PublicError('Spond sent an unexpected chat response.'); }
         if (typeof data?.auth !== 'string' || !data.auth) throw new PublicError('Spond sent an unexpected chat response.');
@@ -189,7 +246,7 @@ export class Spond {
     return this.#chat;
   }
 
-  async #chatRequest(path, query) {
+  async #chatRequest(path, query, { method = 'GET', body, write = false } = {}) {
     for (let attempt = 0; ; attempt += 1) {
       const chat = await this.#chatSession(attempt > 0);
       const url = new URL(`${chat.url}${path}`);
@@ -198,26 +255,28 @@ export class Spond {
       let response;
       try {
         response = await this.#fetcher(url, {
-          method: 'GET', headers: { Auth: chat.auth, Accept: 'application/json' },
+          method, headers: { Auth: chat.auth, Accept: 'application/json', ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
           redirect: 'manual', signal: AbortSignal.timeout(30_000),
         });
-      } catch { throw new PublicError('Could not reach Spond chat. Check the network and retry.'); }
+      } catch { throw new PublicError(write ? uncertain : 'Could not reach Spond chat. Check the network and retry.'); }
       // The chat token can expire before the sign-in does: get a new one once. The sign-in itself worked to get
       // the token, so a second refusal is not a reason to sign in again (Spond blocks IPs that sign in too often).
       if (response.status === 401 || response.status === 403) {
         if (attempt === 0) continue;
         throw new PublicError('Spond chat refused access. Retry later; the sign-in itself still works.');
       }
-      return this.#checked(response);
+      return this.#checked(response, write);
     }
   }
 
-  async #checked(response) {
+  async #checked(response, write = false) {
+    if (write && response.status >= 500) throw new PublicError(uncertain);
     if (response.status === 401) throw new PublicError('The Spond sign-in has expired. Run npm run login again.');
     if (response.status === 404) throw new PublicError('Not found in Spond.');
     if (response.status === 429) throw new PublicError('Spond is limiting requests. Wait a few minutes before retrying.');
     if (!response.ok) throw new PublicError(`Spond responded with HTTP ${response.status}.`);
-    return limitedJson(response);
+    return write ? limitedJson(response).catch(() => { throw new PublicError(uncertain); }) : limitedJson(response);
   }
 
   // Profile and groups change rarely; caching them keeps request volume low, which Spond enforces.
@@ -476,5 +535,147 @@ export class Spond {
     // Spond numbers messages from 0, so a first message numbered 1 still has an older one.
     if (messages.length > 0 && messages[0].num > 0 && data.length >= limit) result.olderBefore = messages[0].num;
     return result;
+  }
+
+  async listPolls({ group_id, limit = 20 } = {}) {
+    const groupId = group_id === undefined ? undefined : spondId(group_id, 'group_id');
+    limitValue(limit);
+    const context = await this.#context();
+    const { family, groupNames, people, timeZone } = context;
+    // Polls are posts of type POLL, which list_posts (type PLAIN) does not include.
+    const data = await this.#request('/posts/', { type: 'POLL', max: String(limit), ...(groupId ? { groupId } : {}) });
+    if (!Array.isArray(data)) throw new PublicError('Spond sent an unexpected response.');
+    const items = data.filter((post) => post?.poll && typeof post.id === 'string').slice(0, limit).map((post) => ({
+      id: str(post.id, 64), group: groupNames.get(post.groupId), title: str(post.title),
+      author: people.get(post.ownerId) || 'Unknown', time: localTime(post.timestamp, timeZone),
+      poll: pollSummary(post.poll, family, timeZone),
+    }));
+    return { timeZone, items, total: items.length };
+  }
+
+  // Checks an answer to an event and returns the request to send, what to show the parent, and how to read the result.
+  async planEventResponse({ event_id, accepted, member, reason } = {}) {
+    const eventId = spondId(event_id, 'event_id');
+    if (typeof accepted !== 'boolean') throw new PublicError('accepted must be true or false.');
+    let declineMessage;
+    if (reason !== undefined) {
+      if (accepted) throw new PublicError('reason is only used when declining.');
+      declineMessage = typeof reason === 'string' ? clean(reason).replace(/\s+/g, ' ').trim() : '';
+      if (!declineMessage) throw new PublicError('reason must be non-empty text.');
+      if (declineMessage.length > maxReason) throw new PublicError(`reason can be at most ${maxReason} characters.`);
+    }
+    const context = await this.#context();
+    const event = await this.#request(`/sponds/${eventId}`);
+    if (!event || typeof event !== 'object' || Array.isArray(event)) throw new PublicError('Spond sent an unexpected response.');
+    const id = familyMember(event.behalfOfIds, context.family, member, 'event');
+    const name = context.family.get(id).name || 'Unknown';
+    const status = responseOf(event.responses, id);
+    const now = Date.now();
+    // The same rules as Spond's web client for someone who is not an organizer.
+    if (event.cancelled === true) throw new PublicError('The event is cancelled.');
+    if (event.expired === true || Date.parse(event.endTimestamp) <= now) throw new PublicError('The event is over.');
+    if (event.registered === true) throw new PublicError('The organizer has registered attendance, so the answer can no longer change.');
+    if (event.payment) throw new PublicError('This event has a payment. Answer it in the Spond app.');
+    const deadlinePassed = Date.parse(event.rsvpDate) <= now;
+    const answered = status !== 'unanswered';
+    const warnings = [];
+    if (accepted) {
+      if (status === 'accepted' || status === 'waiting_list') throw new PublicError(`${name} has already answered yes (${status}).`);
+      if (deadlinePassed && status !== 'unconfirmed') {
+        throw new PublicError(`The answer deadline has passed${answered ? ', so the answer cannot change' : ''}. Message the organizer instead.`);
+      }
+      const full = event.maxAccepted > 0 && event.maxAccepted <= list(event.responses?.acceptedIds).length;
+      if (full && status !== 'unconfirmed') warnings.push(`The event is full, so this puts ${name} on the waiting list.`);
+    } else {
+      if (status === 'declined') throw new PublicError(`${name} has already declined.`);
+      if (deadlinePassed && answered) throw new PublicError('The answer deadline has passed, so the answer cannot change. Message the organizer instead.');
+      if (status === 'accepted' && list(event.responses?.waitinglistIds).length > 0) {
+        warnings.push(`${name} gives up the spot to the next on the waiting list, and may not get it back.`);
+      }
+      if (status === 'waiting_list') warnings.push(`${name} leaves the waiting list.`);
+      if (status === 'unconfirmed') warnings.push(`${name} gives up the spot offered from the waiting list.`);
+    }
+    const preview = { member: name, group: context.groupNames.get(event.recipients?.group?.id), event: str(event.heading),
+      start: localTime(event.startTimestamp, context.timeZone), answer: accepted ? 'yes' : 'no', previousAnswer: status,
+      ...(declineMessage ? { reason: declineMessage } : {}), ...(warnings.length ? { warnings } : {}) };
+    const request = { method: 'PUT', path: `/sponds/${eventId}/responses/${id}`, body: { accepted, ...(declineMessage ? { declineMessage } : {}) } };
+    // The answer Spond shows afterwards; waiting_list counts as a yes.
+    const outcome = async () => {
+      const answerNow = responseOf((await this.#request(`/sponds/${eventId}`))?.responses, id);
+      return { verified: accepted ? ['accepted', 'waiting_list'].includes(answerNow) : answerNow === 'declined', answerNow };
+    };
+    return { request, preview, outcome };
+  }
+
+  async planPollVote({ post_id, option_id, member, vote = true } = {}) {
+    const postId = spondId(post_id, 'post_id');
+    if (typeof option_id !== 'string' || !optionIdPattern.test(option_id)) throw new PublicError('Invalid option_id.');
+    if (typeof vote !== 'boolean') throw new PublicError('vote must be true or false.');
+    const context = await this.#context();
+    const post = await this.#request(`/posts/${postId}`);
+    const poll = post?.poll;
+    if (!poll || typeof poll !== 'object') throw new PublicError('That post has no poll.');
+    if (poll.expired === true || Date.parse(poll.dueBy) <= Date.now()) throw new PublicError('The poll has ended.');
+    const raw = list(poll.options).find((item) => item?.id === option_id);
+    if (!raw) throw new PublicError('No option with that option_id in the poll.');
+    if (poll.type === 'TIME' && Date.parse(raw.text) <= Date.now()) throw new PublicError('That time has passed.');
+    const id = familyMember(poll.behalfOfIds, context.family, member, 'poll');
+    const name = context.family.get(id).name || 'Unknown';
+    if (list(raw.votes).includes(id) === vote) throw new PublicError(vote ? `${name} has already voted for that option.` : `${name} has not voted for that option.`);
+    const summary = pollSummary(poll, context.family, context.timeZone);
+    const index = summary.options.findIndex((item) => item.id === option_id);
+    const optionText = summary.options[index]?.text.trim();
+    // A blank option would show nothing in the preview, so the parent could not see what is voted for.
+    if (!optionText) throw new PublicError('That option has no text. Vote in the Spond app.');
+    // By member ID, not name: two family members can share a name.
+    const previous = summary.options.filter((item) => list(list(poll.options).find((o) => o?.id === item.id)?.votes).includes(id)).map((item) => item.text);
+    // shortcut: assumes Spond replaces the vote in a single-choice poll, as the web client sends no removal; verify live.
+    const warnings = vote && !summary.multipleChoice && previous.length ? [`Single-choice poll: replaces ${name}'s vote for ${previous.join(', ')}.`] : [];
+    const preview = { member: name, group: context.groupNames.get(post.groupId), poll: str(post.title), question: summary.question,
+      option: optionText, position: `${index + 1} of ${summary.options.length}`, allOptions: summary.options.map((item) => item.text),
+      vote, ...(warnings.length ? { warnings } : {}) };
+    const request = { method: 'PUT', path: `/posts/${postId}/poll/vote/${option_id}/${id}`, body: { value: vote } };
+    // What the member has voted for afterwards. In a single-choice poll an earlier vote must be gone too.
+    const outcome = async () => {
+      const options = list((await this.#request(`/posts/${postId}`))?.poll?.options);
+      const has = (option) => list(option?.votes).includes(id);
+      const votedForNow = options.filter(has).map((option) => str(option.text) || '');
+      const chosen = has(options.find((option) => option?.id === option_id)) === vote;
+      const othersCleared = summary.multipleChoice || !vote || options.every((option) => option?.id === option_id || !has(option));
+      return { verified: chosen && othersCleared, votedForNow };
+    };
+    return { request, preview, outcome };
+  }
+
+  // Sends a request planned above. Only PUT on the paths the planners build.
+  async send({ method, path, body }) {
+    if (method !== 'PUT' || !/^\/(sponds\/[0-9A-F]{32}\/responses|posts\/[0-9A-F]{32}\/poll\/vote\/[0-9A-Za-z_-]{1,64})\/[0-9A-F]{32}$/i.test(path)) {
+      throw new PublicError('Invalid Spond request.');
+    }
+    return this.#request(path, undefined, { method, body, write: true });
+  }
+
+  async planChatRead({ chat_id } = {}) {
+    const id = chatId(chat_id);
+    const context = await this.#context();
+    const [newest] = list(await this.#chatRequest(`/chats/${id}/messages`, { count: '1' })).filter((message) => Number.isInteger(message?.msgNum));
+    if (!newest) throw new PublicError('The chat has no messages to mark as read.');
+    const shown = this.#message(newest, context, { excerpt: true });
+    const preview = { chatId: id, upToMessage: newest.msgNum, newest: [shown.author, shown.text].filter(Boolean).join(': ') };
+    const run = async () => {
+      await this.#chatRequest(`/chats/${id}/${newest.msgNum}/read`, undefined, { method: 'PUT', body: {}, write: true });
+      return { chatId: id, readUpTo: newest.msgNum };
+    };
+    return { preview, run };
+  }
+
+  planPostsRead({ post_ids } = {}) {
+    if (!Array.isArray(post_ids) || post_ids.length < 1 || post_ids.length > 20) throw new PublicError('post_ids must list 1 to 20 post IDs.');
+    const ids = [...new Set(post_ids.map((id) => spondId(id, 'post_id')))];
+    const run = async () => {
+      await this.#request('/posts/markAsRead', undefined, { method: 'POST', body: ids, write: true });
+      return { markedRead: ids.length };
+    };
+    return { preview: { postIds: ids }, run };
   }
 }

@@ -23,10 +23,12 @@
 !/src/mcp-format.js
 !/src/paths.js
 !/src/server.js
+!/src/sending.js
 !/src/spond.js
 !/test/
 /test/*
 !/test/auth.test.js
 !/test/mcp-format.test.js
 !/test/server.test.js
+!/test/sending.test.js
 !/test/spond.test.js

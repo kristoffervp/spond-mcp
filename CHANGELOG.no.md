@@ -2,6 +2,11 @@
 
 [English](CHANGELOG.md)
 
+## 0.5.0 (2026-11-25)
+
+- `list_polls` viser avstemninger med alternativer, antall stemmer og hva familiemedlemmene dine har stemt. Avstemninger er ikke med i `list_posts`.
+- Sending, av med mindre `SPOND_ALLOW_SEND=1`: svar på arrangementer og stem i avstemninger for et familiemedlem i to steg (`prepare_event_response` eller `prepare_poll_vote`, så `send_prepared` med en engangskode), og merk chatter og innlegg som lest. Med MCP-elicitation bekrefter forelderen hver av dem i klientens dialog; `send_prepared` trenger også det forberedte `summary`, og nekter hvis arrangementet eller avstemningen er endret siden. Ikke testet mot Spond ennå.
+
 ## 0.4.0 (2026-11-25)
 
 - Usynlige tegn (retningsoverstyring, tegn uten bredde og Unicode-tagger) fjernes fra all tekst, og tekst som kuttes midt i en emoji, er fortsatt gyldig. Før kunne et langt innlegg med en emoji i kuttet hindre familiedashbordet i å lagre Spond-data.

@@ -2,6 +2,11 @@
 
 [Norsk](CHANGELOG.no.md)
 
+## 0.5.0 (2026-11-25)
+
+- `list_polls` lists polls with options, vote counts and what your family members voted. Polls are not in `list_posts`.
+- Sending, off unless `SPOND_ALLOW_SEND=1`: answer events and vote in polls for a family member in two steps (`prepare_event_response` or `prepare_poll_vote`, then `send_prepared` with a one-time code), and mark chats and posts as read. With MCP elicitation the parent confirms each one in the client's dialog; `send_prepared` also needs the prepared `summary`, and refuses if the event or poll changed since. Not yet tested against Spond.
+
 ## 0.4.0 (2026-11-25)
 
 - Invisible characters (direction overrides, zero-width and Unicode tag characters) are removed from all text, and text cut in the middle of an emoji stays valid. Before, a long post with an emoji at the cut could stop the family dashboard from saving Spond data.

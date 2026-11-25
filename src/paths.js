@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = fileURLToPath(new URL('..', import.meta.url));
 export const dataDir = resolve(process.env.SPOND_DATA_DIR || join(projectRoot, '.data'));
 export const sessionPath = join(dataDir, 'session.json');
+export const sentLogPath = join(dataDir, 'sent.jsonl');
 export const apiBase = 'https://api.spond.com/core/v1';
 
 export async function ensurePrivateDataDir() {

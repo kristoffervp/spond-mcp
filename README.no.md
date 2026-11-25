@@ -10,7 +10,7 @@
 
 <p align="center">Norsk · <a href="README.md">English</a></p>
 
-En lokal MCP-server med bare lesetilgang, som lar en KI-klient lese arrangementene, innleggene på gruppeveggen og chattene dine i Spond. Den kan ikke svare på invitasjoner, sende meldinger eller endre noe i Spond.
+En lokal MCP-server som lar en KI-klient lese arrangementene, innleggene på gruppeveggen, avstemningene og chattene dine i Spond. Som standard leser den bare. Med sending slått på kan den også svare på arrangementer, stemme i avstemninger og merke chatter og innlegg som lest. Den kan ikke sende meldinger.
 
 **Uoffisiell.** Ikke laget av eller knyttet til Spond AS. Den bruker udokumenterte endepunkter som kan endres uten varsel.
 
@@ -48,10 +48,31 @@ npm run login
 | `list_posts` | Nye innlegg på gruppeveggen med kommentarer, inntil `limit` (1 til 50, standard 20). Filter: `group_id`. `include_images` gir også bildelenker |
 | `list_chats` | Nye chatter, også gruppechatter du følger som foresatt, med tidspunkt, nummer (`newestNum`) og et utdrag av den nyeste meldingen. Inntil `limit` (1 til 50, standard 20) |
 | `get_chat` | De nyeste meldingene i én chat, eldste først, inntil `limit` (1 til 50, standard 20). `max_num` leser lenger bakover. `include_images` gir også bildelenker |
+| `list_polls` | Nye avstemninger med alternativer, antall stemmer, fristen og hva familiemedlemmene dine har stemt. Andre telles, men navngis ikke. Filter: `group_id` |
 
 Hvert arrangement viser svaret til hvert familiemedlem (`accepted`, `declined`, `unanswered`, `waiting_list`, `unconfirmed` eller `unknown`) og antall svar fra alle inviterte. Tidspunkter er lokale, med UTC-forskyvningen for tidssonen i Spond-profilen din, for eksempel `2026-10-10T12:15+02:00`. Lister gir høyst 50 elementer, og lange tekster forkortes og merkes. Svarene kommer som `structuredContent` og som JSON-tekst, begge merket som ikke-betrodd innhold fra Spond.
 
 `asGuardian` merker chatter du følger på vegne av et barn, og det er der foreldrenes gruppechatter vanligvis ligger. Når en chat har eldre meldinger, gir `get_chat` `olderBefore`, et nummer du kan sende som `max_num`. `fromFamily` merker meldinger fra deg eller en annen foresatt til barna dine. Slettede meldinger har ingen tekst.
+
+## Sending (valgfritt, ikke testet mot Spond ennå)
+
+Sett `SPOND_ALLOW_SEND=1` (i `"env"` i klientoppsettet) for å få disse verktøyene:
+
+| Verktøy | Hva det gjør |
+| --- | --- |
+| `prepare_event_response` | Forbereder ja eller nei til et arrangement for et familiemedlem (`member`, fornavn eller fullt navn, hvis flere er invitert), med en valgfri `reason` på høyst 100 tegn ved nei |
+| `prepare_poll_vote` | Forbereder en stemme i en avstemning for et familiemedlem, eller fjerner en med `vote: false` |
+| `send_prepared` | Sender det et forberedelsesverktøy har forberedt |
+| `mark_chat_read` | Merker en chat som lest til og med den nyeste meldingen |
+| `mark_posts_read` | Merker inntil 20 innlegg som lest |
+
+- Svar og stemmer tar to steg. Et forberedelsesverktøy sjekker forespørselen og gir nøyaktig det som vil bli sendt, et sammendrag på én linje (`summary`) og en engangskode; ingenting er sendt da. `send_prepared` trenger koden og det samme sammendraget, så klientens godkjenning viser hva som sendes. Koden virker én gang, går ut etter 10 minutter og hører til serveren som kjører: en omstartet server har glemt den. Rett før sending sjekker serveren arrangementet eller avstemningen på nytt og nekter hvis noe er endret. Etterpå melder den det nye svaret eller stemmen. Alt som sendes eller forsøkes sendt, logges i `.data/sent.jsonl`.
+- Hvis klienten støtter det (MCP-elicitation), bekrefter du hver sending og hver merking som lest i klientens egen dialog. Ellers er klientens godkjenning av verktøykall den eneste sjekken: velg aldri «Tillat alltid» for `send_prepared`, `mark_chat_read` eller `mark_posts_read`.
+- Hvis Spond ikke svarer etter en sending, sier serveren at den kan ha blitt sendt. Sjekk med `list_events` eller `list_polls` før du forbereder den på nytt.
+- Samme regler som Sponds nettklient: ingen svar på avlyste eller ferdige arrangementer, arrangementer med betaling, eller etter at oppmøtet er registrert; ikke ja etter svarfristen, med mindre en plass er tilbudt fra ventelisten; ingen endring av svar etter fristen. Et forberedelsesverktøy varsler når et ja setter barnet på venteliste, eller et nei gir fra seg en plass.
+- Merk som lest trenger ingen kode, men bekreftes som en sending. Det kan ikke angres.
+- Endepunktene er hentet fra Sponds nettklient og er ikke testet mot en ekte konto ennå. Sjekk resultatet i Spond-appen de første gangene.
+- Et innlegg eller en chat kan inneholde tekst som skal få KI-klienten til å svare for deg. Les forhåndsvisningen, og la sending være av når du ikke trenger den.
 
 ## Slik virker det
 
@@ -59,24 +80,31 @@ Serveren kjører på datamaskinen din og snakker med KI-klienten over stdio. Den
 
 ```mermaid
 flowchart LR
-  client["KI-klient<br/>Claude Desktop, ChatGPT …"]
+  you(["Du"])
+  client["KI-klient"]
   subgraph computer["Din datamaskin"]
     server["MCP-server<br/>src/server.js, mcp-format.js"]
-    spond["Spond-klient<br/>spond.js"]
+    spond["Spond-klient og leseverktøy<br/>spond.js"]
+    send["Sendeverktøy<br/>sending.js<br/>(bare med SPOND_ALLOW_SEND=1)"]
     auth["Innlogging og fornying<br/>auth.js"]
     login["npm run login<br/>login.js"]
-    data[(".data/<br/>session.json<br/>(innloggingstokenene)")]
+    data[(".data/<br/>session.json (innlogging),<br/>sent.jsonl")]
   end
   api["Spond-API<br/>api.spond.com"]
   chat["Spond-chat<br/>egen vert på spond.com"]
+  you <-->|"spør, ser forhåndsvisningen"| client
   client <-->|"MCP over stdio"| server
   server --> spond
+  server -->|"prepare → sammendrag og kode,<br/>så send_prepared"| send
+  send -.->|"ber deg bekrefte<br/>(MCP-elicitation)"| client
+  send -->|"sjekker på nytt, sender én gang"| spond
   spond -->|"ber om et gyldig token"| auth
   spond <-->|"HTTPS med tilgangstokenet"| api
   spond <-->|"HTTPS med et chat-token,<br/>holdt i minnet"| chat
   login -->|"e-post eller telefon<br/>og passord"| auth
   auth <-->|"logg inn og forny"| api
   auth -.->|"lagrer og leser tokenene"| data
+  send -.->|"logger det som sendes"| data
 ```
 
 ## Innstillinger
@@ -85,7 +113,8 @@ Settes i klientoppsettet (og i Terminal for `npm run login`):
 
 | Variabel | Standard | Brukes til |
 | --- | --- | --- |
-| `SPOND_DATA_DIR` | `.data` i denne mappen | Hvor innloggingen lagres |
+| `SPOND_DATA_DIR` | `.data` i denne mappen | Hvor innloggingen og loggen over det som er sendt, lagres |
+| `SPOND_ALLOW_SEND` | av | `1` gir verktøyene som svarer på arrangementer, stemmer og merker som lest (se Sending) |
 
 ## Feilsøking
 
